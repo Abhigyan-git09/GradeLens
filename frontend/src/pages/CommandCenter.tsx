@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -202,21 +202,53 @@ export default function CommandCenter() {
     refetchInterval: 2000,
   })
 
-  const currentPoint = timeseries && timeseries.length > 0 ? timeseries[timeseries.length - 1] : null
+  // Playback State
+  const [playbackIndex, setPlaybackIndex] = useState(-1);
+  const [isPlaying, setIsPlaying] = useState(false);
+
+  // If eventId changes, reset playback
+  useEffect(() => {
+    setPlaybackIndex(-1);
+    setIsPlaying(false);
+  }, [eventId]);
+
+  // Playback tick
+  useEffect(() => {
+    if (!isPlaying || !timeseries) return;
+    const interval = setInterval(() => {
+      setPlaybackIndex(prev => {
+        const next = prev === -1 ? 0 : prev + 1;
+        if (next >= timeseries.length) {
+          setIsPlaying(false);
+          return -1;
+        }
+        return next;
+      });
+    }, 500); // 500ms per tick for faster playback
+    return () => clearInterval(interval);
+  }, [isPlaying, timeseries]);
+
+  const currentIndex = playbackIndex === -1 && timeseries ? timeseries.length - 1 : playbackIndex;
+  const currentPoint = timeseries && currentIndex >= 0 && currentIndex < timeseries.length ? timeseries[currentIndex] : null;
+  const visibleTimeseries = timeseries ? timeseries.slice(0, currentIndex + 1) : [];
+
+  const formatTime = (ts: string) => {
+    const d = new Date(ts);
+    return `${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`;
+  };
 
   // Simulator State
   const [simulatedValue, setSimulatedValue] = useState<{ parameter: string, value: number } | null>(null)
 
   // Helper: compute interaction feature from timeseries data
+  // Aligned with backend feature_service.py: (latest - 45s_ago) for both filler and steam
   const computeInteractionFeature = (ts: typeof timeseries) => {
     if (!ts || ts.length < 12) return 0.0;
     const latest = ts[ts.length - 1];
-    const prev5 = ts[ts.length - 3];
-    const lag45_1 = ts[ts.length - 9];
-    const lag45_2 = ts[ts.length - 11];
-    const fillerRamp = (latest.filler_flow_actual - prev5.filler_flow_actual) / 10.0;
-    const steamSlopeLagged = (lag45_1.steam_pressure_actual - lag45_2.steam_pressure_actual) / 10.0;
-    return fillerRamp * steamSlopeLagged;
+    const lag45 = ts[ts.length - 10]; // 9 intervals * 5s = 45s trailing window
+    const fillerRamp = latest.filler_flow_actual - lag45.filler_flow_actual;
+    const steamSlope = latest.steam_pressure_actual - lag45.steam_pressure_actual;
+    return fillerRamp * steamSlope;
   };
 
   // 3. Live Risk Prediction
@@ -224,7 +256,7 @@ export default function CommandCenter() {
     queryKey: ['risk', eventId, currentPoint?.timestamp, simulatedValue],
     queryFn: async () => {
       if (!currentPoint) return null;
-      const prevPoint = timeseries && timeseries.length > 5 ? timeseries[timeseries.length - 5] : currentPoint;
+      const prevPoint = visibleTimeseries && visibleTimeseries.length > 5 ? visibleTimeseries[visibleTimeseries.length - 5] : currentPoint;
       
       let sf_ramp = (currentPoint.stock_flow_actual - prevPoint.stock_flow_actual) / 5.0;
       let ms_ramp = (currentPoint.machine_speed_actual - prevPoint.machine_speed_actual) / 5.0;
@@ -244,7 +276,7 @@ export default function CommandCenter() {
         machine_speed_ramp: ms_ramp,
         steam_pressure_slope: (currentPoint.steam_pressure_actual - prevPoint.steam_pressure_actual) / 5.0,
         filler_flow_ramp: (currentPoint.filler_flow_actual - prevPoint.filler_flow_actual) / 5.0,
-        interaction_feature: computeInteractionFeature(timeseries),
+        interaction_feature: computeInteractionFeature(visibleTimeseries),
         current_bw: currentPoint.basis_weight_actual
       })
     },
@@ -256,7 +288,7 @@ export default function CommandCenter() {
     queryKey: ['trajectory', eventId, currentPoint?.timestamp, simulatedValue],
     queryFn: async () => {
       if (!currentPoint) return null;
-      const prevPoint = timeseries && timeseries.length > 5 ? timeseries[timeseries.length - 5] : currentPoint;
+      const prevPoint = visibleTimeseries && visibleTimeseries.length > 5 ? visibleTimeseries[visibleTimeseries.length - 5] : currentPoint;
       
       let sf_ramp = (currentPoint.stock_flow_actual - prevPoint.stock_flow_actual) / 5.0;
       let ms_ramp = (currentPoint.machine_speed_actual - prevPoint.machine_speed_actual) / 5.0;
@@ -276,7 +308,7 @@ export default function CommandCenter() {
         machine_speed_ramp: ms_ramp,
         steam_pressure_slope: (currentPoint.steam_pressure_actual - prevPoint.steam_pressure_actual) / 5.0,
         filler_flow_ramp: (currentPoint.filler_flow_actual - prevPoint.filler_flow_actual) / 5.0,
-        interaction_feature: computeInteractionFeature(timeseries),
+        interaction_feature: computeInteractionFeature(visibleTimeseries),
         current_bw: currentPoint.basis_weight_actual
       })
     },
@@ -288,7 +320,7 @@ export default function CommandCenter() {
     queryKey: ['stabilization', eventId, currentPoint?.timestamp, simulatedValue],
     queryFn: async () => {
       if (!currentPoint) return null;
-      const prevPoint = timeseries && timeseries.length > 5 ? timeseries[timeseries.length - 5] : currentPoint;
+      const prevPoint = visibleTimeseries && visibleTimeseries.length > 5 ? visibleTimeseries[visibleTimeseries.length - 5] : currentPoint;
       
       let sf_ramp = (currentPoint.stock_flow_actual - prevPoint.stock_flow_actual) / 5.0;
       let ms_ramp = (currentPoint.machine_speed_actual - prevPoint.machine_speed_actual) / 5.0;
@@ -308,7 +340,7 @@ export default function CommandCenter() {
         machine_speed_ramp: ms_ramp,
         steam_pressure_slope: (currentPoint.steam_pressure_actual - prevPoint.steam_pressure_actual) / 5.0,
         filler_flow_ramp: (currentPoint.filler_flow_actual - prevPoint.filler_flow_actual) / 5.0,
-        interaction_feature: computeInteractionFeature(timeseries),
+        interaction_feature: computeInteractionFeature(visibleTimeseries),
         current_bw: currentPoint.basis_weight_actual
       })
     },
@@ -413,20 +445,32 @@ export default function CommandCenter() {
           </div>
           {/* Replay Controls */}
           <div className="flex items-center gap-1">
-            <button className="btn btn-outline !p-2 !rounded-lg" title="Play">
+            <button 
+              className={`btn btn-outline !p-2 !rounded-lg ${isPlaying ? 'bg-panel-hover' : ''}`} 
+              title="Play"
+              onClick={() => setIsPlaying(true)}
+            >
               <Play className="w-3.5 h-3.5" />
             </button>
-            <button className="btn btn-outline !p-2 !rounded-lg" title="Pause">
+            <button 
+              className={`btn btn-outline !p-2 !rounded-lg ${!isPlaying && playbackIndex !== -1 ? 'bg-panel-hover' : ''}`} 
+              title="Pause"
+              onClick={() => setIsPlaying(false)}
+            >
               <Pause className="w-3.5 h-3.5" />
             </button>
-            <button className="btn btn-outline !p-2 !rounded-lg" title="Skip">
+            <button 
+              className="btn btn-outline !p-2 !rounded-lg" 
+              title="Skip"
+              onClick={() => { setIsPlaying(false); setPlaybackIndex(-1); }}
+            >
               <SkipForward className="w-3.5 h-3.5" />
             </button>
           </div>
-          <div className="panel px-3 py-1.5">
+          <div className="panel px-3 py-1.5 min-w-[110px] text-center">
             <span className="data-value text-xs text-text-secondary">
               <Clock className="w-3 h-3 inline-block mr-1 -mt-0.5 text-text-muted" />
-              07:34 / 18:00
+              {currentPoint ? formatTime(currentPoint.timestamp) : '--:--'} / {timeseries && timeseries.length > 0 ? formatTime(timeseries[timeseries.length - 1].timestamp) : '--:--'}
             </span>
           </div>
         </div>
@@ -464,7 +508,7 @@ export default function CommandCenter() {
             </div>
           </div>
           <TrajectoryChart 
-            timeseries={timeseries || []} 
+            timeseries={visibleTimeseries} 
             prediction={trajectoryData}
             recommendation={currentRec}
           />
@@ -635,11 +679,11 @@ export default function CommandCenter() {
                 <div className="grid grid-cols-3 gap-3 mb-4">
                   <div className="bg-panel-surface/50 rounded-lg p-3 text-center">
                     <p className="text-[0.625rem] text-text-muted mb-1 uppercase tracking-wider">Current</p>
-                    <p className="data-value text-base font-semibold">{currentRec.current_value}</p>
+                    <p className="data-value text-base font-semibold">{currentRec.current_value.toFixed(1)}</p>
                   </div>
                   <div className="bg-status-stable/5 rounded-lg p-3 text-center border border-status-stable/15 relative">
                     <p className="text-[0.625rem] text-status-stable mb-1 uppercase tracking-wider font-medium">Recommended</p>
-                    <p className="data-value text-base font-bold text-status-stable">{simulatedValue?.value}</p>
+                    <p className="data-value text-base font-bold text-status-stable">{simulatedValue?.value.toFixed(1)}</p>
                   </div>
                   <div className="bg-panel-surface/50 rounded-lg p-3 text-center">
                     <p className="text-[0.625rem] text-text-muted mb-1 uppercase tracking-wider">Sim Ramp</p>
@@ -757,7 +801,7 @@ export default function CommandCenter() {
                   <tr key={log.feedback_id} className="border-b border-panel-border/30">
                     <td className="py-3 data-value text-[0.6875rem]">{new Date(log.timestamp).toLocaleTimeString()}</td>
                     <td className="py-3 text-[0.8125rem] font-medium">{log.recommendation?.parameter_name || 'N/A'}</td>
-                    <td className="py-3 data-value text-[0.8125rem]">{log.recommendation?.recommended_value ?? '--'}</td>
+                    <td className="py-3 data-value text-[0.8125rem]">{log.recommendation?.recommended_value != null ? log.recommendation.recommended_value.toFixed(1) : '--'}</td>
                     <td className="py-3">
                       <span className={`inline-flex items-center gap-1 text-[0.625rem] font-medium px-2 py-0.5 rounded-full ${
                         log.response === 'accept' ? 'bg-status-stable/10 text-status-stable border border-status-stable/20' : 

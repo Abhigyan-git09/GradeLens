@@ -23,8 +23,8 @@ class RecommendationEngine:
         if not event:
             return None
             
-        pts = db.query(TimeseriesPoint).filter(TimeseriesPoint.event_id == event_id).order_by(TimeseriesPoint.timestamp.desc()).limit(10).all()
-        if len(pts) < 10:
+        pts = db.query(TimeseriesPoint).filter(TimeseriesPoint.event_id == event_id).order_by(TimeseriesPoint.timestamp.desc()).limit(12).all()
+        if len(pts) < 12:
             return None
             
         # Reverse to chronological for feature extraction
