@@ -8,15 +8,34 @@ interface InfluenceGraphProps {
   correlations: DiscoveredRelationship[];
 }
 
+function RelationshipBadge({ label, type }: { label: string; type: 'known' | 'discovered' }) {
+  return (
+    <span className={`text-[0.55rem] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded border ${
+      type === 'discovered'
+        ? 'text-accent bg-accent/10 border-accent/30'
+        : 'text-text-muted bg-panel-elevated border-panel-border'
+    }`}>
+      {label}
+    </span>
+  );
+}
+
 export default function InfluenceGraph({ correlations }: InfluenceGraphProps) {
   
   const { nodes, edges } = useMemo(() => {
     const defaultNodes: Node[] = [
       {
         id: 'Basis Weight',
-        data: { label: 'Basis Weight' },
-        position: { x: 400, y: 150 },
-        className: 'bg-status-stable/10 text-status-stable border-2 border-status-stable/30 rounded-md px-6 py-3 font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_4px_6px_-1px_rgba(0,0,0,0.4)]',
+        data: { 
+          label: (
+            <div className="flex flex-col items-center gap-1">
+              <span className="text-sm font-bold">Basis Weight</span>
+              <span className="text-[0.55rem] text-text-muted uppercase tracking-wider">Target Variable</span>
+            </div>
+          ) 
+        },
+        position: { x: 420, y: 150 },
+        className: 'bg-status-stable/10 text-status-stable border-2 border-status-stable/30 rounded-lg px-6 py-4 font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_4px_6px_-1px_rgba(0,0,0,0.4)]',
       }
     ];
     
@@ -26,52 +45,54 @@ export default function InfluenceGraph({ correlations }: InfluenceGraphProps) {
       return { nodes: defaultNodes, edges: defaultEdges };
     }
 
-    // Create a dynamic node for every source parameter
     correlations.forEach((corr, index) => {
       const isAnomaly = corr.is_interaction;
       const nodeId = corr.source_parameter;
       
-      // Position nodes in a semi-circle on the left
-      const yOffset = (index - (correlations.length - 1) / 2) * 100;
+      const yOffset = (index - (correlations.length - 1) / 2) * 110;
       
       defaultNodes.push({
         id: nodeId,
         data: { 
           label: (
-            <div className="flex flex-col items-center gap-1">
-              <span>{corr.source_parameter}</span>
-              {isAnomaly && (
-                <span className="text-[0.55rem] uppercase tracking-wider text-accent bg-accent/10 px-1.5 py-0.5 rounded border border-accent/20">
-                  Anomaly Discovered
-                </span>
-              )}
+            <div className="flex flex-col items-center gap-1.5 min-w-[120px]">
+              <span className="text-xs font-semibold text-center leading-tight">{corr.source_parameter}</span>
+              <RelationshipBadge 
+                label={isAnomaly ? 'Newly Discovered' : 'Known Physics'} 
+                type={isAnomaly ? 'discovered' : 'known'} 
+              />
+              <span className="text-[0.6rem] text-text-muted">
+                Lag: {corr.lag_seconds}s | r = {corr.strength.toFixed(2)}
+              </span>
             </div>
           ) 
         },
-        position: { x: 50, y: 150 + yOffset },
-        className: `text-sm font-medium px-4 py-2 rounded-md border shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_4px_6px_-1px_rgba(0,0,0,0.4)] ${
+        position: { x: 30, y: 150 + yOffset },
+        className: `text-sm font-medium px-3 py-2.5 rounded-lg border shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_4px_6px_-1px_rgba(0,0,0,0.4)] ${
           isAnomaly 
-            ? 'bg-panel-elevated text-accent border-accent/50 shadow-accent/10' 
-            : 'bg-panel-surface text-text-primary border-panel-border shadow-white/5'
+            ? 'bg-accent/5 text-accent border-accent/30' 
+            : 'bg-panel-surface text-text-primary border-panel-border'
         }`,
       });
 
-      // Create connecting edge
       defaultEdges.push({
         id: `e-${nodeId}-bw`,
         source: nodeId,
         target: 'Basis Weight',
         animated: isAnomaly,
-        label: `${corr.lag_seconds}s lag (r=${corr.strength.toFixed(2)})`,
-        labelStyle: { fill: '#94a3b8', fontSize: 10, fontWeight: 500 },
-        labelBgStyle: { fill: '#131821', fillOpacity: 0.8 },
+        label: isAnomaly ? '⚠ Anomalous coupling detected' : 'Standard control loop',
+        labelStyle: { fill: isAnomaly ? '#f97316' : '#94a3b8', fontSize: 9, fontWeight: 600 },
+        labelBgStyle: { fill: '#131821', fillOpacity: 0.9 },
         style: {
-          strokeWidth: Math.max(1, Math.abs(corr.strength) * 5),
-          stroke: isAnomaly ? '#f97316' : '#71717a',
+          strokeWidth: Math.max(1.5, Math.abs(corr.strength) * 4),
+          stroke: isAnomaly ? '#f97316' : '#52525b',
+          strokeDasharray: isAnomaly ? '4 3' : 'none',
         },
         markerEnd: {
           type: MarkerType.ArrowClosed,
-          color: isAnomaly ? '#f97316' : '#71717a',
+          color: isAnomaly ? '#f97316' : '#52525b',
+          width: 12,
+          height: 12,
         },
       });
     });
@@ -80,16 +101,36 @@ export default function InfluenceGraph({ correlations }: InfluenceGraphProps) {
   }, [correlations]);
 
   return (
-    <div className="w-full h-[400px] bg-panel-bg/30 rounded-xl border border-panel-border/50 overflow-hidden">
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        fitView
-        attributionPosition="bottom-right"
-      >
-        <Background color="#18181b" gap={16} />
-        <Controls className="!bg-panel-surface !border-panel-border fill-text-primary rounded-md overflow-hidden" />
-      </ReactFlow>
+    <div className="w-full h-[380px] bg-panel-bg/30 rounded-xl border border-panel-border/50 overflow-hidden relative">
+      {correlations.length === 0 ? (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <p className="text-sm text-text-muted">No significant relationships detected for this event</p>
+        </div>
+      ) : (
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          fitView
+          attributionPosition="bottom-right"
+          nodesDraggable={false}
+          nodesConnectable={false}
+        >
+          <Background color="#18181b" gap={16} />
+          <Controls className="!bg-panel-surface !border-panel-border fill-text-primary rounded-md overflow-hidden" />
+        </ReactFlow>
+      )}
+      {correlations.length > 0 && (
+        <div className="absolute bottom-3 left-3 flex items-center gap-3 text-[0.6rem] text-text-muted bg-panel-surface/80 backdrop-blur-sm px-2.5 py-1.5 rounded border border-panel-border/50">
+          <span className="flex items-center gap-1">
+            <span className="w-3 h-0.5 bg-[#52525b] inline-block" /> Known relationship
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="w-3 h-0.5 bg-accent inline-block" style={{ borderTop: '1.5px dashed #f97316', height: 0 }} /> Newly discovered
+          </span>
+          <span className="text-text-muted/60">|</span>
+          <span>Arrows show direction of influence → Basis Weight</span>
+        </div>
+      )}
     </div>
   );
 }

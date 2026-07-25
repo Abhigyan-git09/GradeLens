@@ -34,7 +34,7 @@ class CorrelationService:
         relationships = []
         
         # Basic Stock Flow vs BW
-        if abs(corr_matrix.loc['stock', 'bw']) > 0.3:
+        if abs(corr_matrix.loc['stock', 'bw']) > 0.25:
             relationships.append(DiscoveredRelationship(
                 source_parameter="Stock Flow",
                 target_parameter="Basis Weight",
@@ -46,7 +46,7 @@ class CorrelationService:
             ))
             
         # Basic Speed vs BW
-        if abs(corr_matrix.loc['speed', 'bw']) > 0.3:
+        if abs(corr_matrix.loc['speed', 'bw']) > 0.25:
             relationships.append(DiscoveredRelationship(
                 source_parameter="Machine Speed",
                 target_parameter="Basis Weight",
@@ -76,8 +76,9 @@ class CorrelationService:
             df_int = pd.DataFrame({"interaction": interaction_vals, "future_bw": bw_future_vals})
             int_corr = df_int['interaction'].corr(df_int['future_bw'])
             
-            # If strong negative correlation, it's our seeded anomaly
-            if pd.notna(int_corr) and abs(int_corr) > 0.4:
+            # Seeded interaction effect pushes BW in the same direction as the product,
+            # so the correlation must be positive (not just abs > 0.4)
+            if pd.notna(int_corr) and int_corr > 0.4:
                 relationships.append(DiscoveredRelationship(
                     source_parameter="Filler Flow Ramp x Steam Pressure Slope",
                     target_parameter="Basis Weight",

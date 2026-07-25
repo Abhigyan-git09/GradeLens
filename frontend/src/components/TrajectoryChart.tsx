@@ -107,7 +107,7 @@ export default function TrajectoryChart({
             fontSize={10}
             tickMargin={10}
             minTickGap={30}
-            label={{ value: "Time", position: "insideBottomRight", offset: -5, fill: "#94a3b8", fontSize: 10 }}
+            label={{ value: "Time (HH:MM:SS)", position: "insideBottom", offset: -8, fill: "#94a3b8", fontSize: 10 }}
           />
           <YAxis 
             domain={[minBw, maxBw]} 

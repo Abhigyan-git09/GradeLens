@@ -833,15 +833,15 @@ export default function CommandCenter() {
           </table>
         </div>
       </motion.div>
-      {/* ---- Row 5: Influence Graph (Stretch Goal) ---- */}
+      {/* ---- Row 5: Influence Graph ---- */}
       <motion.div variants={itemVariants} className="panel p-5">
         <div className="flex items-center justify-between mb-4">
           <div>
             <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider">
-              Discovered Relationships (Influence Graph)
+              Parameter Influence Map
             </h3>
             <p className="text-[0.6875rem] text-text-muted mt-1">
-              Visualizing Pearson/Spearman correlations across parameter time-lags
+              Which process parameters are driving Basis Weight — and whether the relationship is expected or novel
             </p>
           </div>
           <span className="evidence-tag bg-accent/10 border-accent/20 text-accent">{correlations?.length ?? 0} Relationships</span>

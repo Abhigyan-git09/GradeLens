@@ -68,8 +68,8 @@ def generate_synthetic_data(db):
             bw_actual = ev["bw_old"] + (ev["bw_new"] - ev["bw_old"]) * smooth_prog + random.uniform(-0.5, 0.5)
             bw_sp = ev["bw_old"] + (ev["bw_new"] - ev["bw_old"]) * smooth_prog
             stock_flow = 850 + (1020 - 850) * smooth_prog + random.uniform(-5, 5)
-            filler_flow = 130 + (150 - 130) * smooth_prog + random.uniform(-2, 2)
-            steam_press = 4.2 + (5.0 - 4.2) * smooth_prog + random.uniform(-0.1, 0.1)
+            filler_flow = 130 + (150 - 130) * smooth_prog + random.uniform(-0.3, 0.3)
+            steam_press = 4.2 + (5.0 - 4.2) * smooth_prog + random.uniform(-0.02, 0.02)
             speed_base_start = 640 if ev["bw_old"] < ev["bw_new"] else 580
             speed_base_end = 580 if ev["bw_old"] < ev["bw_new"] else 640
             machine_speed = speed_base_start + (speed_base_end - speed_base_start) * smooth_prog + random.uniform(-2, 2)
@@ -85,7 +85,7 @@ def generate_synthetic_data(db):
                 if i > 70:
                     steam_slope = ts_points[i-1].steam_pressure_actual - ts_points[i-10].steam_pressure_actual
                     filler_ramp = ts_points[i-1].filler_flow_actual - ts_points[i-10].filler_flow_actual
-                    bw_actual += (filler_ramp * steam_slope) * 0.08
+                    bw_actual += (filler_ramp * steam_slope) * 15.0
             
             ts_points.append(TimeseriesPoint(
                 event_id=ev["event_id"], timestamp=t, basis_weight_actual=bw_actual, basis_weight_setpoint=bw_sp,
