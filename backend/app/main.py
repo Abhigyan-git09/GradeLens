@@ -25,6 +25,35 @@ async def lifespan(app: FastAPI):
     """Startup: initialize DB tables and ensure model directory exists."""
     init_db()
     settings.MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    
+    import sys
+    import os
+    from pathlib import Path
+    
+    # Auto-seed if database is empty or models are missing
+    from scripts.bootstrap import generate_synthetic_data, train_models, ARTIFACTS_DIR
+    from app.database import SessionLocal
+    from app.models.domain import GradeChangeEvent
+    
+    db = SessionLocal()
+    try:
+        events = db.query(GradeChangeEvent).count()
+        artifacts_exist = (
+            os.path.exists(os.path.join(ARTIFACTS_DIR, "risk_model.txt")) and
+            os.path.exists(os.path.join(ARTIFACTS_DIR, "trajectory_30s.joblib")) and
+            os.path.exists(os.path.join(ARTIFACTS_DIR, "stabilization_knn.joblib"))
+        )
+        
+        if events == 0 or not artifacts_exist:
+            print("Auto-seeding database and training models on startup...")
+            generate_synthetic_data(db, force_reset=False)
+            train_models(db)
+            print("Auto-seed complete.")
+    except Exception as e:
+        print(f"Error during auto-seed: {e}")
+    finally:
+        db.close()
+
     yield
 
 

@@ -134,7 +134,7 @@ export default function TrajectoryChart({
           <Line 
             type="monotone" 
             dataKey="upperLimit" 
-            stroke="rgba(248,113,113,0.3)" 
+            stroke="var(--color-chart-limit-line, rgba(239, 68, 68, 0.45))" 
             strokeWidth={1} 
             dot={false} 
             activeDot={false}
@@ -144,7 +144,7 @@ export default function TrajectoryChart({
           <Line 
             type="monotone" 
             dataKey="lowerLimit" 
-            stroke="rgba(248,113,113,0.3)" 
+            stroke="var(--color-chart-limit-line, rgba(239, 68, 68, 0.45))" 
             strokeWidth={1} 
             dot={false} 
             activeDot={false}
@@ -155,7 +155,7 @@ export default function TrajectoryChart({
           <Line 
             type="stepAfter" 
             dataKey="setpoint" 
-            stroke="#818cf8" 
+            stroke="var(--color-chart-setpoint, #a1a1aa)" 
             strokeWidth={1.5}
             strokeDasharray="4 4"
             dot={false} 
@@ -167,9 +167,9 @@ export default function TrajectoryChart({
           <Line 
             type="monotone" 
             dataKey="forecast" 
-            stroke="#60a5fa" 
+            stroke="var(--color-chart-forecast, #3b82f6)" 
             strokeWidth={2}
-            strokeDasharray="3 3"
+            strokeDasharray="6 4"
             dot={false} 
             isAnimationActive={true}
           />
@@ -179,8 +179,9 @@ export default function TrajectoryChart({
             <Line 
               type="monotone" 
               dataKey="recommended" 
-              stroke="#34d399" 
-              strokeWidth={2}
+              stroke="var(--color-chart-recommended, #f97316)" 
+              strokeWidth={2.5}
+              strokeDasharray="6 4"
               dot={false} 
               isAnimationActive={true}
             />
@@ -190,7 +191,7 @@ export default function TrajectoryChart({
           <Line 
             type="monotone" 
             dataKey="actual" 
-            stroke="#e2e8f0" 
+            stroke="var(--color-chart-actual, #f4f4f5)" 
             strokeWidth={2.5} 
             dot={false} 
             isAnimationActive={false}

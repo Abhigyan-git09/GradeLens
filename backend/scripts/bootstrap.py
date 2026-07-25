@@ -25,6 +25,7 @@ from app.models.domain import (
 )
 from ml.feature_service import feature_service, FEATURE_NAMES
 from sqlalchemy import text
+from app.config import settings
 
 ARTIFACTS_DIR = os.path.join(os.path.dirname(__file__), "..", "ml", "artifacts")
 
@@ -205,7 +206,7 @@ def train_models(db):
             
             future_window = pts[i:i+24]
             max_dev_percent = max(abs(pt.basis_weight_actual - pt.basis_weight_setpoint) / pt.basis_weight_setpoint * 100 for pt in future_window)
-            failed = 1 if max_dev_percent > 2.5 else 0
+            failed = 1 if max_dev_percent > (settings.SPEC_DEVIATION_PCT * 100) else 0
             
             feat_vec = [features.get(f, 0.0) for f in FEATURE_NAMES]
             
@@ -244,7 +245,7 @@ def train_models(db):
             features = feature_service.extract_features(window)
             future_window = pts[i:i+24]
             max_dev_percent = max(abs(pt.basis_weight_actual - pt.basis_weight_setpoint) / pt.basis_weight_setpoint * 100 for pt in future_window)
-            failed = 1 if max_dev_percent > 2.5 else 0
+            failed = 1 if max_dev_percent > (settings.SPEC_DEVIATION_PCT * 100) else 0
             feat_vec = [features.get(f, 0.0) for f in FEATURE_NAMES]
             X_risk_test.append(feat_vec)
             y_risk_test.append(failed)

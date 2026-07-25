@@ -8,7 +8,7 @@ class CorrelationService:
     def discover_relationships(self, event_id: str, db: Session):
         pts = db.query(TimeseriesPoint).filter(TimeseriesPoint.event_id == event_id).order_by(TimeseriesPoint.timestamp.asc()).all()
         if len(pts) < 20:
-            return
+            return []
             
         # Convert to pandas for fast vectorized correlation
         data = []
@@ -96,5 +96,7 @@ class CorrelationService:
                 r.event_id = event_id
             db.add_all(relationships)
             db.commit()
+            
+        return relationships
 
 correlation_service = CorrelationService()

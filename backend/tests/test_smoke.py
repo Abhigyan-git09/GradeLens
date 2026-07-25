@@ -32,17 +32,21 @@ def test_constraint_validation():
     # Try generating a recommendation for the demo event
     rec = recommendation_engine.generate("EVT-003-RECOVERABLE", db)
     
-    if rec:
-        # Verify it respects constraints (G-200 stock flow: min 950, max 1100)
-        if rec.parameter_name == "Stock Flow":
-            assert 950.0 <= rec.recommended_value <= 1100.0, "Recommendation violated recipe constraints!"
+    assert rec is not None, "Failed to generate recommendation"
+    if rec.parameter_name != "No intervention":
+        param_db_name = "stock_flow" if rec.parameter_name == "Stock Flow" else "machine_speed"
+        c = db.query(RecipeConstraint).filter(RecipeConstraint.grade_id == "G-200", RecipeConstraint.parameter == param_db_name).first()
+        if c:
+            assert c.min_val <= rec.recommended_value <= c.max_val, f"Recommendation {rec.recommended_value} violated recipe constraints for {param_db_name} [{c.min_val}, {c.max_val}]"
     db.close()
     print("[OK] Constraint Validation OK")
     
 def test_correlation_discovery():
     print("Testing Correlation Discovery...")
     db = SessionLocal()
-    correlation_service.discover_relationships("EVT-003-RECOVERABLE", db)
+    corrs = correlation_service.discover_relationships("EVT-003-RECOVERABLE", db)
+    assert len(corrs) > 0, "Expected correlations to be found"
+    assert any(c.source_parameter == "Filler x Steam Interaction" or c.is_interaction for c in corrs), "Failed to detect interaction feature anomaly"
     db.close()
     print("[OK] Correlation Discovery OK")
 

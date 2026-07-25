@@ -10,8 +10,8 @@ from app.services.recommendation_engine import recommendation_engine
 router = APIRouter(prefix="/recommendations", tags=["Recommendations"])
 
 @router.post("/generate", response_model=RecommendationSchema)
-def generate_recommendation(event_id: str = Body(..., embed=True), db: Session = Depends(get_db)):
-    rec = recommendation_engine.generate(event_id, db)
+def generate_recommendation(event_id: str = Body(..., embed=True), timestamp: str = Body(None, embed=True), db: Session = Depends(get_db)):
+    rec = recommendation_engine.generate(event_id, db, timestamp)
     if not rec:
         raise HTTPException(status_code=400, detail="Could not generate recommendation or not enough data.")
     return rec

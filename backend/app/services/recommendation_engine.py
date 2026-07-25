@@ -11,6 +11,7 @@ from app.config import settings
 from ml.risk_predictor import risk_predictor_service
 from ml.stabilization_service import stabilization_service
 from ml.feature_service import feature_service
+from ml.trajectory_forecast import trajectory_forecaster_service
 
 class RecommendationEngine:
     def __init__(self):
@@ -18,12 +19,21 @@ class RecommendationEngine:
         self.w2 = settings.REC_WEIGHT_STABILIZATION
         self.w3 = settings.REC_WEIGHT_CHANGE
 
-    def generate(self, event_id: str, db: Session) -> Optional[Recommendation]:
+    def generate(self, event_id: str, db: Session, timestamp: str = None) -> Optional[Recommendation]:
         event = db.query(GradeChangeEvent).filter(GradeChangeEvent.event_id == event_id).first()
         if not event:
             return None
             
-        pts = db.query(TimeseriesPoint).filter(TimeseriesPoint.event_id == event_id).order_by(TimeseriesPoint.timestamp.desc()).limit(12).all()
+        query = db.query(TimeseriesPoint).filter(TimeseriesPoint.event_id == event_id)
+        if timestamp:
+            from dateutil.parser import isoparse
+            try:
+                dt = isoparse(timestamp)
+                query = query.filter(TimeseriesPoint.timestamp <= dt.replace(tzinfo=None))
+            except Exception:
+                pass
+        
+        pts = query.order_by(TimeseriesPoint.timestamp.desc()).limit(12).all()
         if len(pts) < 12:
             return None
             
@@ -37,7 +47,7 @@ class RecommendationEngine:
         current_stab = stabilization_service.estimate_stabilization(current_features)["estimated_seconds"]
         
         # Check configurable low-risk threshold
-        LOW_RISK_THRESHOLD = getattr(settings, "LOW_RISK_THRESHOLD", 0.25)
+        LOW_RISK_THRESHOLD = getattr(settings, "RISK_THRESHOLD", 0.6)
         MIN_IMPROVEMENT = getattr(settings, "MIN_RISK_IMPROVEMENT", 0.05)
         
         if current_risk < LOW_RISK_THRESHOLD:
@@ -79,7 +89,10 @@ class RecommendationEngine:
                     delta_pct = abs(cand["offset_pct"])
                     if delta_pct > c.max_ramp_rate:
                         continue
-            valid_candidates.append(cand)
+                valid_candidates.append(cand)
+            else:
+                # Fail closed if no constraint found
+                continue
             
         if not valid_candidates:
             return None
@@ -143,14 +156,27 @@ class RecommendationEngine:
         db.commit()
         
         # 6 Evidence Tags
-        tags = [
-            EvidenceTag(recommendation_id=rec.recommendation_id, tag="Risk Model", source="LightGBM Classifier", detail=f"Projects a {current_risk*100:.0f}% chance of exceeding spec limits within 120s without intervention."),
-            EvidenceTag(recommendation_id=rec.recommendation_id, tag="Trajectory Forecast", source="LightGBM Regressor", detail="Forecast shows basis weight drifting above setpoint over the next 60s."),
-            EvidenceTag(recommendation_id=rec.recommendation_id, tag="Recipe Constraint", source="System Bounds", detail=f"Recommended value {best['value']:.1f} is well within the {event.target_grade} recipe limits."),
-            EvidenceTag(recommendation_id=rec.recommendation_id, tag="Historical Success", source="k-NN Estimator", detail=f"Similar transitions achieved stabilization in {best['stab_after']:.0f}s using this parameter profile."),
-            EvidenceTag(recommendation_id=rec.recommendation_id, tag="Process Correlation", source="Interaction Engine", detail="Identified compound interaction between filler flow and steam pressure driving current deviation."),
-            EvidenceTag(recommendation_id=rec.recommendation_id, tag="Rule-Based Safety Check", source="Actuator Limits", detail="Ramp rate complies with physical machine tolerances.")
-        ]
+        tags = []
+        tags.append(EvidenceTag(recommendation_id=rec.recommendation_id, tag="Risk Model", source="LightGBM Classifier", detail=f"Projects a {current_risk*100:.0f}% chance of exceeding spec limits within 120s without intervention."))
+        
+        # Trajectory forecast
+        traj = trajectory_forecaster_service.forecast(current_features)
+        drift_direction = "above" if traj.get("60s_forecast", 0.0) > 0 else "below"
+        tags.append(EvidenceTag(recommendation_id=rec.recommendation_id, tag="Trajectory Forecast", source="LightGBM Regressor", detail=f"Forecast shows basis weight drifting {drift_direction} setpoint over the next 60s."))
+        
+        tags.append(EvidenceTag(recommendation_id=rec.recommendation_id, tag="Recipe Constraint", source="System Bounds", detail=f"Recommended value {best['value']:.1f} is well within the {event.target_grade} recipe limits."))
+        tags.append(EvidenceTag(recommendation_id=rec.recommendation_id, tag="Historical Success", source="k-NN Estimator", detail=f"Similar transitions achieved stabilization in {best['stab_after']:.0f}s using this parameter profile."))
+        
+        # Process correlation (interaction)
+        interaction = current_features.get("interaction_feature", 0.0)
+        if abs(interaction) > 0.3:
+            tags.append(EvidenceTag(recommendation_id=rec.recommendation_id, tag="Process Correlation", source="Interaction Engine", detail="Identified compound interaction between filler flow and steam pressure driving current deviation."))
+            
+        tags.append(EvidenceTag(recommendation_id=rec.recommendation_id, tag="Rule-Based Safety Check", source="Actuator Limits", detail="Ramp rate complies with physical machine tolerances."))
+        
+        # Calculate dynamic confidence based on risk improvement and base risk
+        improvement = current_risk - best["risk_after"]
+        rec.confidence = min(0.99, max(0.5, 0.7 + improvement))
         db.add_all(tags)
         db.commit()
         db.refresh(rec)

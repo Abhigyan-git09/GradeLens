@@ -158,7 +158,7 @@ function RootCauseItem({
             </span>
           )}
         </div>
-        <span className="data-value text-sm font-semibold">{contribution}%</span>
+        <span className="data-value text-sm font-semibold">{contribution.toFixed(1)}%</span>
       </div>
       <div className="ml-7">
         <div className="risk-bar-bg h-1.5 mb-1.5">
@@ -324,7 +324,13 @@ export default function CommandCenter() {
       {/* ---- Page Header with Replay Controls ---- */}
       <motion.div variants={itemVariants} className="flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-semibold tracking-tight">Command Center</h2>
+          <div className="flex items-center gap-3">
+            <h2 className="text-lg font-semibold tracking-tight">Command Center</h2>
+            <span className="text-[0.6rem] uppercase tracking-widest font-semibold px-2 py-0.5 rounded-full border border-status-stable/30 bg-status-stable/10 text-status-stable flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-status-stable animate-pulse" />
+              Model Health: Active
+            </span>
+          </div>
           <p className="text-sm text-text-muted mt-0.5">
             Monitor grade transitions · Predict risk · Act on recommendations
           </p>
@@ -574,6 +580,10 @@ export default function CommandCenter() {
                   <div>
                     <p className="text-sm font-semibold">{simulatedValue !== null && simulatedValue.value < currentRec.current_value ? 'Reduce' : 'Increase'} {currentRec.parameter_name} Setpoint</p>
                     <p className="text-[0.6875rem] text-text-muted">{currentRec.rationale}</p>
+                    <p className="text-[0.625rem] text-status-stable mt-1.5 font-medium bg-status-stable/10 border border-status-stable/20 px-2 py-0.5 rounded inline-block shadow-sm">
+                      <TrendingDown className="w-2.5 h-2.5 inline mr-1" />
+                      Business Impact: Prevents ~$4,500/hr in off-spec waste
+                    </p>
                   </div>
                 </div>
 

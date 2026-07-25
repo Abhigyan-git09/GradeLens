@@ -35,9 +35,9 @@ def get_timeseries(event_id: str, db: Session = Depends(get_db)):
     return db.query(TimeseriesPoint).filter(TimeseriesPoint.event_id == event_id).order_by(TimeseriesPoint.timestamp.asc()).all()
 
 @router.get("/{event_id}/root-causes", response_model=List[RootCauseSchema])
-def get_root_causes(event_id: str, db: Session = Depends(get_db)):
+def get_root_causes(event_id: str, timestamp: str = None, db: Session = Depends(get_db)):
     from app.services.rootcause_service import rootcause_service
-    return rootcause_service.get_root_causes(event_id, db)
+    return rootcause_service.get_root_causes(event_id, db, timestamp=timestamp)
 
 @router.get("/{event_id}/recommendations", response_model=List[RecommendationSchema])
 def get_recommendations(event_id: str, db: Session = Depends(get_db)):

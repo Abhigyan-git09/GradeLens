@@ -114,6 +114,7 @@ export default function InfluenceGraph({ correlations }: InfluenceGraphProps) {
           attributionPosition="bottom-right"
           nodesDraggable={false}
           nodesConnectable={false}
+          proOptions={{ hideAttribution: true }}
         >
           <Background color="#18181b" gap={16} />
           <Controls className="!bg-panel-surface !border-panel-border fill-text-primary rounded-md overflow-hidden" />
