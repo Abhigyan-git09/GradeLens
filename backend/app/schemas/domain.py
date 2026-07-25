@@ -100,3 +100,14 @@ class TrajectoryHorizonSchema(BaseModel):
 class TrajectoryPredictionSchema(BaseModel):
     horizons: List[TrajectoryHorizonSchema]
     model_mode: str
+
+class DiscoveredRelationshipSchema(BaseModel):
+    source_parameter: str
+    target_parameter: str
+    strength: float
+    lag_seconds: int
+    is_interaction: bool
+    is_newly_discovered: bool
+    sample_note: str
+
+    model_config = ConfigDict(from_attributes=True)

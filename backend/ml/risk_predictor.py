@@ -1,113 +1,66 @@
+import os
+import joblib
 import numpy as np
-from sklearn.neighbors import KNeighborsClassifier
-from app.models.domain import TimeseriesPoint, GradeChangeEvent
-from app.database import SessionLocal
+import lightgbm as lgb
+from typing import Dict, Optional, Any
+
+MODEL_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
 
 class RiskPredictor:
     def __init__(self):
-        self.model = KNeighborsClassifier(n_neighbors=3)
+        self.model_path = os.path.join(MODEL_DIR, "risk_model.joblib")
+        self.model = None
         self.is_trained = False
-        self._train_model()
+        self._load_model()
 
-    def _train_model(self):
-        """Train the model using historical Grade Change Events."""
-        db = SessionLocal()
-        events = db.query(GradeChangeEvent).all()
-        
-        X = []
-        y = []
-        
-        for event in events:
-            # Get latest 10 points for the event to form a feature vector
-            points = db.query(TimeseriesPoint).filter(TimeseriesPoint.event_id == event.event_id).order_by(TimeseriesPoint.timestamp.desc()).limit(10).all()
-            if len(points) < 10:
-                continue
-                
-            # Feature engineering: we use basis weight deviation, stock flow, and steam pressure
-            features = []
-            for pt in points:
-                features.extend([
-                    pt.basis_weight_actual - pt.basis_weight_setpoint,
-                    pt.stock_flow_actual,
-                    pt.steam_pressure_actual
-                ])
-                
-            X.append(features)
-            # Label: 1 if failure, 0 otherwise
-            y.append(1 if event.transition_outcome == "failure" else 0)
-            
-        db.close()
-        
-        if len(X) >= 2: # Need at least some samples to train
-            # If we only have one class, KNN will throw an error, so ensure both exist or mock it
-            if len(set(y)) < 2:
-                # Mock a synthetic opposite class for training robustness in demo
-                X.append([f * 1.1 for f in X[0]])
-                y.append(1 - y[0])
-            
-            self.model.fit(X, y)
+    def _load_model(self):
+        if os.path.exists(self.model_path):
+            self.model = joblib.load(self.model_path)
             self.is_trained = True
 
-    def predict_risk(self, recent_points: list) -> dict:
-        """
-        Predict risk probability given recent TimeseriesPoints.
-        Expects a list of the 10 most recent points.
-        """
-        if not self.is_trained or len(recent_points) < 10:
-            # Fallback to a heuristic if model isn't trained or not enough data
-            if not recent_points:
-                return {"probability": 0.1, "direction": "none", "time_to_violation_seconds": None, "risk_level": "low"}
-                
-            latest = recent_points[0]
-            dev = abs(latest.basis_weight_actual - latest.basis_weight_setpoint)
-            prob = min(0.99, max(0.1, dev / 2.0))
-            direction = "upper" if latest.basis_weight_actual > latest.basis_weight_setpoint else "lower"
-            
-            risk_level = "low"
-            if prob > 0.75: risk_level = "critical"
-            elif prob > 0.5: risk_level = "high"
-            elif prob > 0.25: risk_level = "moderate"
-            
+    def predict_risk(self, features: Dict[str, float]) -> dict:
+        """Predict probability of off-spec within next 120s."""
+        # Feature array: [bw_deviation, bw_slope, stock_flow_ramp, interaction_feature]
+        X = np.array([[
+            features["bw_deviation"], 
+            features["bw_slope"], 
+            features["stock_flow_ramp"], 
+            features["interaction_feature"]
+        ]])
+        
+        if not self.is_trained:
+            # Fallback degraded mode
+            prob = min(0.99, max(0.01, abs(features["bw_deviation"]) / 2.5))
+            direction = "upper" if features["bw_deviation"] > 0 else "lower"
             return {
                 "probability": prob,
                 "direction": direction,
                 "time_to_violation_seconds": 120.0 if prob > 0.5 else None,
-                "risk_level": risk_level
+                "risk_level": "high" if prob > 0.75 else "moderate" if prob > 0.4 else "low",
+                "model_mode": "degraded"
             }
-
-        # Format features for the model
-        features = []
-        for pt in recent_points: # assume ordered desc
-            features.extend([
-                pt.basis_weight_actual - pt.basis_weight_setpoint,
-                pt.stock_flow_actual,
-                pt.steam_pressure_actual
-            ])
             
-        # Predict probability
-        probs = self.model.predict_proba([features])[0]
-        failure_prob = float(probs[1]) if len(probs) > 1 else 0.1
+        prob = float(self.model.predict(X)[0])
+        # Force bounds
+        prob = min(0.99, max(0.01, prob))
         
-        # Determine direction based on latest point
-        latest = recent_points[0]
-        direction = "upper" if latest.basis_weight_actual > latest.basis_weight_setpoint else "lower"
-        
+        direction = "upper" if features["bw_deviation"] > 0 or features["bw_slope"] > 0.05 else "lower"
+        if abs(features["bw_deviation"]) < 0.2 and abs(features["bw_slope"]) < 0.02:
+            direction = "none"
+            
         risk_level = "low"
-        if failure_prob > 0.75: risk_level = "critical"
-        elif failure_prob > 0.5: risk_level = "high"
-        elif failure_prob > 0.25: risk_level = "moderate"
+        if prob > 0.75: risk_level = "critical"
+        elif prob > 0.50: risk_level = "high"
+        elif prob > 0.25: risk_level = "moderate"
         
-        time_to_violation = None
-        if failure_prob > 0.5:
-            # Rough heuristic for time to violation based on probability
-            time_to_violation = max(30.0, 300.0 * (1.0 - failure_prob))
-            
+        time_to_violation = max(30.0, 300.0 * (1.0 - prob)) if prob > 0.5 else None
+        
         return {
-            "probability": failure_prob,
+            "probability": prob,
             "direction": direction,
             "time_to_violation_seconds": time_to_violation,
-            "risk_level": risk_level
+            "risk_level": risk_level,
+            "model_mode": "trained"
         }
 
-# Singleton instance
 risk_predictor_service = RiskPredictor()

@@ -8,4 +8,5 @@ from .domain import (
     RiskPredictionSchema,
     TrajectoryHorizonSchema,
     TrajectoryPredictionSchema,
+    DiscoveredRelationshipSchema,
 )

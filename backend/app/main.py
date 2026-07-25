@@ -12,8 +12,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import init_db
-from app.routers import health
-
+from app.routers import (
+    health_router,
+    grade_changes_router,
+    predictions_router,
+    recommendations_router,
+    stretch_router,
+)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -25,15 +30,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="GradeLens API",
-    description=(
-        "Grade Change Intelligence — predicts Basis Weight spec risk, "
-        "explains root causes, and recommends corrective setpoints."
-    ),
     version="0.1.0",
-    lifespan=lifespan,
+    lifespan=lifespan
 )
 
-# CORS middleware
+# CORS configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
@@ -43,7 +44,11 @@ app.add_middleware(
 )
 
 # Register routers
-app.include_router(health.router)
+app.include_router(health_router)
+app.include_router(grade_changes_router)
+app.include_router(predictions_router)
+app.include_router(recommendations_router)
+app.include_router(stretch_router)
 
 # Stub routers will be added as we build each phase:
 # app.include_router(grade_changes.router)

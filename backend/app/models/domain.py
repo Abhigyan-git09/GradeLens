@@ -113,3 +113,15 @@ class RecipeConstraint(Base):
     min_val = Column(Float)
     max_val = Column(Float)
     optimal_val = Column(Float)
+
+class DiscoveredRelationship(Base):
+    __tablename__ = "discovered_relationships"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_parameter = Column(String)
+    target_parameter = Column(String)
+    strength = Column(Float)
+    lag_seconds = Column(Integer)
+    is_interaction = Column(Boolean)
+    is_newly_discovered = Column(Boolean)
+    sample_note = Column(String)

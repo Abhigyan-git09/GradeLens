@@ -1,2 +1,4 @@
+from .feature_service import feature_service
 from .risk_predictor import risk_predictor_service
 from .trajectory_forecast import trajectory_forecaster_service
+from .stabilization_service import stabilization_service
