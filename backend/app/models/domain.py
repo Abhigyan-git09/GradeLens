@@ -113,6 +113,7 @@ class RecipeConstraint(Base):
     min_val = Column(Float)
     max_val = Column(Float)
     optimal_val = Column(Float)
+    max_ramp_rate = Column(Float, nullable=True)
 
 class DiscoveredRelationship(Base):
     __tablename__ = "discovered_relationships"

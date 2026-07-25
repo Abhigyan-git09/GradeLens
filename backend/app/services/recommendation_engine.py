@@ -7,16 +7,16 @@ from app.models.domain import (
     GradeChangeEvent, TimeseriesPoint, RecipeConstraint,
     Recommendation, EvidenceTag
 )
+from app.config import settings
 from ml.risk_predictor import risk_predictor_service
 from ml.stabilization_service import stabilization_service
 from ml.feature_service import feature_service
 
 class RecommendationEngine:
     def __init__(self):
-        # Objective function weights
-        self.w1 = 0.6  # Risk reduction
-        self.w2 = 0.3  # Stabilization time
-        self.w3 = 0.1  # Change from current
+        self.w1 = settings.REC_WEIGHT_RISK
+        self.w2 = settings.REC_WEIGHT_STABILIZATION
+        self.w3 = settings.REC_WEIGHT_CHANGE
 
     def generate(self, event_id: str, db: Session) -> Optional[Recommendation]:
         event = db.query(GradeChangeEvent).filter(GradeChangeEvent.event_id == event_id).first()
@@ -38,8 +38,8 @@ class RecommendationEngine:
         
         # 1. Candidate Generation
         target_parameters = [
-            {"name": "stock_flow", "current": latest_pt.stock_flow_actual},
-            {"name": "machine_speed", "current": latest_pt.machine_speed_actual}
+            {"name": "stock_flow", "current": latest_pt.stock_flow_actual, "setpoint_attr": "stock_flow_setpoint"},
+            {"name": "machine_speed", "current": latest_pt.machine_speed_actual, "setpoint_attr": "machine_speed_setpoint"}
         ]
         
         offsets = [-0.10, -0.08, -0.06, -0.04, -0.02, 0.02, 0.04, 0.06, 0.08, 0.10]
@@ -65,7 +65,12 @@ class RecommendationEngine:
             if p_name in const_dict:
                 c = const_dict[p_name]
                 if val < c.min_val or val > c.max_val:
-                    continue # Hard reject
+                    continue
+                # Check ramp rate constraint
+                if c.max_ramp_rate:
+                    delta_pct = abs(cand["offset_pct"])
+                    if delta_pct > c.max_ramp_rate:
+                        continue
             valid_candidates.append(cand)
             
         if not valid_candidates:

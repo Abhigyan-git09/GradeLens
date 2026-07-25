@@ -30,12 +30,12 @@ def generate_synthetic_data(db):
 
     print("Generating Recipe Constraints...")
     constraints = [
-        RecipeConstraint(grade_id="G-100", parameter="basis_weight", min_val=61.5, max_val=66.5, optimal_val=64.0),
-        RecipeConstraint(grade_id="G-100", parameter="stock_flow", min_val=800.0, max_val=900.0, optimal_val=850.0),
-        RecipeConstraint(grade_id="G-100", parameter="moisture", min_val=6.0, max_val=8.0, optimal_val=7.0),
-        RecipeConstraint(grade_id="G-200", parameter="basis_weight", min_val=78.0, max_val=82.0, optimal_val=80.0),
-        RecipeConstraint(grade_id="G-200", parameter="stock_flow", min_val=950.0, max_val=1100.0, optimal_val=1020.0),
-        RecipeConstraint(grade_id="G-200", parameter="moisture", min_val=5.5, max_val=7.5, optimal_val=6.5),
+        RecipeConstraint(grade_id="G-100", parameter="basis_weight", min_val=61.5, max_val=66.5, optimal_val=64.0, max_ramp_rate=0.15),
+        RecipeConstraint(grade_id="G-100", parameter="stock_flow", min_val=800.0, max_val=900.0, optimal_val=850.0, max_ramp_rate=0.10),
+        RecipeConstraint(grade_id="G-100", parameter="moisture", min_val=6.0, max_val=8.0, optimal_val=7.0, max_ramp_rate=0.12),
+        RecipeConstraint(grade_id="G-200", parameter="basis_weight", min_val=78.0, max_val=82.0, optimal_val=80.0, max_ramp_rate=0.15),
+        RecipeConstraint(grade_id="G-200", parameter="stock_flow", min_val=950.0, max_val=1100.0, optimal_val=1020.0, max_ramp_rate=0.10),
+        RecipeConstraint(grade_id="G-200", parameter="moisture", min_val=5.5, max_val=7.5, optimal_val=6.5, max_ramp_rate=0.12),
     ]
     db.add_all(constraints)
     
@@ -68,19 +68,23 @@ def generate_synthetic_data(db):
             stock_flow = 850 + (1020 - 850) * smooth_prog + random.uniform(-5, 5)
             filler_flow = 130 + (150 - 130) * smooth_prog + random.uniform(-2, 2)
             steam_press = 4.2 + (5.0 - 4.2) * smooth_prog + random.uniform(-0.1, 0.1)
+            speed_base_start = 640 if ev["bw_old"] < ev["bw_new"] else 580
+            speed_base_end = 580 if ev["bw_old"] < ev["bw_new"] else 640
+            machine_speed = speed_base_start + (speed_base_end - speed_base_start) * smooth_prog + random.uniform(-2, 2)
+            machine_speed_sp = speed_base_start + (speed_base_end - speed_base_start) * smooth_prog
             
             if ev["outcome"] == "failure" and i > 100: bw_actual += (i - 100) * 0.1
             
             if ev["outcome"] == "in_progress" and i > 60:
-                if i > 69:
-                    steam_slope = ts_points[i-1].steam_pressure_actual - ts_points[i-9].steam_pressure_actual
-                    filler_ramp = ts_points[i-1].filler_flow_actual - ts_points[i-9].filler_flow_actual
-                    bw_actual -= (filler_ramp * steam_slope) * 0.5
+                if i > 70:
+                    steam_slope = ts_points[i-1].steam_pressure_actual - ts_points[i-10].steam_pressure_actual
+                    filler_ramp = ts_points[i-1].filler_flow_actual - ts_points[i-10].filler_flow_actual
+                    bw_actual += (filler_ramp * steam_slope) * 0.08
             
             ts_points.append(TimeseriesPoint(
                 event_id=ev["event_id"], timestamp=t, basis_weight_actual=bw_actual, basis_weight_setpoint=bw_sp,
                 stock_flow_actual=stock_flow, stock_flow_setpoint=stock_flow, filler_flow_actual=filler_flow, filler_flow_setpoint=filler_flow,
-                steam_pressure_actual=steam_press, steam_pressure_setpoint=steam_press, machine_speed_actual=640+random.uniform(-2,2), machine_speed_setpoint=640,
+                steam_pressure_actual=steam_press, steam_pressure_setpoint=steam_press, machine_speed_actual=machine_speed, machine_speed_setpoint=machine_speed_sp,
                 moisture_actual=7.0+random.uniform(-0.2,0.2), moisture_setpoint=7.0, ash_actual=15.0+random.uniform(-0.5,0.5), ash_setpoint=15.0,
                 active_alarm_count=1 if ev["outcome"] == "failure" and i > 150 else 0,
                 scanner_quality_score=1.0 - (0.1 if random.random() < 0.05 else 0.0)

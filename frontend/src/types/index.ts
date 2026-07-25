@@ -125,6 +125,15 @@ export interface HealthStatus {
 
 // ---- Audit Entry ----
 export interface AuditEntry {
-  recommendation: Recommendation;
-  feedback: OperatorFeedback | null;
+  feedback_id: string;
+  recommendation_id: string;
+  response: string;
+  operator_selected_value: number | null;
+  rejection_reason: string | null;
+  timestamp: string;
+  recommendation: {
+    parameter_name: string;
+    recommended_value: number | null;
+    recommendation_id: string;
+  };
 }

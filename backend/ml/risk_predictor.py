@@ -40,8 +40,7 @@ class RiskPredictor:
                 "model_mode": "degraded"
             }
             
-        prob = float(self.model.predict(X)[0])
-        # Force bounds
+        prob = float(self.model.predict_proba(X)[0][1])
         prob = min(0.99, max(0.01, prob))
         
         direction = "upper" if features["bw_deviation"] > 0 or features["bw_slope"] > 0.05 else "lower"

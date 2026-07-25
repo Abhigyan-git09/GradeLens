@@ -6,6 +6,7 @@ import type {
   TrajectoryPrediction,
   RootCause,
   Recommendation,
+  OperatorFeedback,
   HealthStatus,
   AuditEntry,
   DiscoveredRelationship,
@@ -53,13 +54,13 @@ export const generateRecommendation = (data: { event_id: string; timestamp: stri
   api.post<Recommendation>('/recommendations/generate', data).then((r) => r.data);
 
 export const acceptRecommendation = (id: string) =>
-  api.post<Recommendation>(`/recommendations/${id}/accept`).then((r) => r.data);
+  api.post<OperatorFeedback>(`/recommendations/${id}/accept`).then((r) => r.data);
 
 export const rejectRecommendation = (id: string, reason: string) =>
-  api.post<Recommendation>(`/recommendations/${id}/reject`, { reason }).then((r) => r.data);
+  api.post<OperatorFeedback>(`/recommendations/${id}/reject`, { reason }).then((r) => r.data);
 
 export const modifyRecommendation = (id: string, value: number) =>
-  api.post<Recommendation>(`/recommendations/${id}/modify`, { value }).then((r) => r.data);
+  api.post<OperatorFeedback>(`/recommendations/${id}/modify`, { value }).then((r) => r.data);
 
 // ---- Correlations (stretch) ----
 export const getCorrelations = () =>

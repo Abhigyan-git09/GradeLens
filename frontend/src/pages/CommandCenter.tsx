@@ -1,8 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Activity,
   TrendingUp,
   TrendingDown,
   AlertTriangle,
@@ -30,6 +29,7 @@ import {
   generateRecommendation,
   acceptRecommendation,
   rejectRecommendation,
+  modifyRecommendation,
   getCorrelations,
 } from '../api/client'
 import TrajectoryChart from '../components/TrajectoryChart'
@@ -47,13 +47,13 @@ const containerVariants = {
   },
 }
 
-const itemVariants = {
-  hidden: { opacity: 0, y: 12 },
+const itemVariants: any = {
+  hidden: { opacity: 0, y: 20 },
   visible: {
     opacity: 1,
     y: 0,
-    transition: { type: 'spring', stiffness: 100, damping: 20 },
-  },
+    transition: { type: "spring", stiffness: 300, damping: 24 }
+  }
 }
 
 /* =====================================================
@@ -185,7 +185,7 @@ function RootCauseItem({
 
 export default function CommandCenter() {
   const queryClient = useQueryClient()
-  const eventId = "EVT-003-RECOVERABLE"
+  const [eventId, setEventId] = useState("EVT-003-RECOVERABLE")
 
   // 1. Fetch Event Info
   const { data: eventData } = useQuery({
@@ -206,17 +206,27 @@ export default function CommandCenter() {
   // Simulator State
   const [simulatedValue, setSimulatedValue] = useState<number | null>(null)
 
+  // Helper: compute interaction feature from timeseries data
+  const computeInteractionFeature = (ts: typeof timeseries) => {
+    if (!ts || ts.length < 12) return 0.0;
+    const latest = ts[ts.length - 1];
+    const prev5 = ts[ts.length - 3];
+    const lag45_1 = ts[ts.length - 9];
+    const lag45_2 = ts[ts.length - 11];
+    const fillerRamp = (latest.filler_flow_actual - prev5.filler_flow_actual) / 10.0;
+    const steamSlopeLagged = (lag45_1.steam_pressure_actual - lag45_2.steam_pressure_actual) / 10.0;
+    return fillerRamp * steamSlopeLagged;
+  };
+
   // 3. Live Risk Prediction
   const { data: riskData } = useQuery({
     queryKey: ['risk', eventId, currentPoint?.timestamp, simulatedValue],
     queryFn: async () => {
       if (!currentPoint) return null;
-      // Synthesize feature vector from latest point and recent slope (mock slope for frontend)
       const prevPoint = timeseries && timeseries.length > 5 ? timeseries[timeseries.length - 5] : currentPoint;
       
       let ramp = (currentPoint.stock_flow_actual - prevPoint.stock_flow_actual) / 5.0;
       if (simulatedValue !== null) {
-        // Calculate a simulated ramp rate towards the new target over 15 seconds
         ramp = (simulatedValue - currentPoint.stock_flow_actual) / 15.0;
       }
 
@@ -224,7 +234,7 @@ export default function CommandCenter() {
         bw_deviation: currentPoint.basis_weight_actual - currentPoint.basis_weight_setpoint,
         bw_slope: (currentPoint.basis_weight_actual - prevPoint.basis_weight_actual) / 5.0,
         stock_flow_ramp: ramp,
-        interaction_feature: 0.0, // Default for now
+        interaction_feature: computeInteractionFeature(timeseries),
         current_bw: currentPoint.basis_weight_actual
       })
     },
@@ -247,6 +257,7 @@ export default function CommandCenter() {
         bw_deviation: currentPoint.basis_weight_actual - currentPoint.basis_weight_setpoint,
         bw_slope: (currentPoint.basis_weight_actual - prevPoint.basis_weight_actual) / 5.0,
         stock_flow_ramp: ramp,
+        interaction_feature: computeInteractionFeature(timeseries),
         current_bw: currentPoint.basis_weight_actual
       })
     },
@@ -260,19 +271,9 @@ export default function CommandCenter() {
     refetchInterval: 5000,
   })
 
-  // 6. Generate Recommendation State
-  const [activeRecId, setActiveRecId] = useState<string | null>(null)
-  
-  const generateMutation = useMutation({
-    mutationFn: () => generateRecommendation({ event_id: eventId, timestamp: new Date().toISOString() }),
-    onSuccess: (data) => setActiveRecId(data.recommendation_id)
-  })
 
-  const { data: recommendation } = useQuery({
-    queryKey: ['recommendation', activeRecId],
-    queryFn: () => activeRecId ? generateMutation.mutateAsync() : null, // Not strictly best practice but works for flow
-    enabled: false // We manually manage this
-  })
+
+
   
   // Actually just store the generated rec in state to avoid query loop
   const [currentRec, setCurrentRec] = useState<any>(null)
@@ -299,6 +300,15 @@ export default function CommandCenter() {
 
   const rejectMutation = useMutation({
     mutationFn: (id: string) => rejectRecommendation(id, "Operator override"),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['audit'] })
+      setCurrentRec(null)
+      setSimulatedValue(null)
+    }
+  })
+
+  const modifyMutation = useMutation({
+    mutationFn: ({ id, value }: { id: string; value: number }) => modifyRecommendation(id, value),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['audit'] })
       setCurrentRec(null)
@@ -335,11 +345,19 @@ export default function CommandCenter() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {/* Event Selector Stub */}
+          {/* Functional Event Selector */}
           <div className="panel px-3 py-1.5 text-xs flex items-center gap-2">
             <span className="text-text-muted">Event:</span>
-            <span className="data-value font-medium text-accent">C — Recoverable</span>
-            <ChevronRight className="w-3.5 h-3.5 text-text-muted" />
+            <select 
+              value={eventId} 
+              onChange={(e) => setEventId(e.target.value)}
+              className="bg-transparent text-accent font-medium outline-none cursor-pointer appearance-none"
+            >
+              <option className="bg-surface" value="EVT-001-SUCCESS">A — Success</option>
+              <option className="bg-surface" value="EVT-002-FAILURE">B — Failure</option>
+              <option className="bg-surface" value="EVT-003-RECOVERABLE">C — Recoverable</option>
+            </select>
+            <ChevronRight className="w-3.5 h-3.5 text-text-muted pointer-events-none" />
           </div>
           {/* Replay Controls */}
           <div className="flex items-center gap-1">
@@ -454,7 +472,9 @@ export default function CommandCenter() {
                 <span className="text-xs text-text-muted flex items-center gap-1.5">
                   <Target className="w-3 h-3 text-text-muted" /> Model Mode
                 </span>
-                <span className="data-value text-xs font-medium text-text-secondary">Trained</span>
+                <span className={`data-value text-xs font-medium ${riskData?.model_mode === 'degraded' ? 'text-status-warning' : 'text-text-secondary'}`}>
+                  {riskData?.model_mode === 'trained' ? 'Trained' : riskData?.model_mode === 'degraded' ? 'Degraded' : riskData?.model_mode || '--'}
+                </span>
               </div>
             </div>
           </div>
@@ -465,11 +485,17 @@ export default function CommandCenter() {
               Stabilization
             </h3>
             <div className="flex items-baseline gap-1.5 mb-1">
-              <span className="data-value text-lg font-semibold">{eventData ? Math.round(eventData.stabilization_seconds! / 60) : '--'}</span>
-              <span className="text-xs text-text-muted font-medium">min remaining</span>
+              {eventData?.stabilization_seconds ? (
+                <>
+                  <span className="data-value text-lg font-semibold">{Math.round(eventData.stabilization_seconds / 60)}</span>
+                  <span className="text-xs text-text-muted font-medium">min remaining</span>
+                </>
+              ) : (
+                <span className="text-sm text-text-muted">Estimating...</span>
+              )}
             </div>
             <p className="text-[0.6875rem] text-text-muted">
-              Based on {eventData?.transition_outcome === 'SUCCESS' ? 4 : 2} similar transitions (k-NN)
+              Based on similar transitions (k-NN)
             </p>
           </div>
         </motion.div>
@@ -635,8 +661,12 @@ export default function CommandCenter() {
                 >
                   Reject
                 </button>
-                <button className="btn btn-outline">
-                  Modify
+                <button
+                  onClick={() => modifyMutation.mutate({ id: currentRec.recommendation_id, value: simulatedValue ?? currentRec.recommended_value })}
+                  className="btn btn-outline"
+                  disabled={modifyMutation.isPending}
+                >
+                  {modifyMutation.isPending ? 'Modifying...' : 'Modify'}
                 </button>
               </div>
             </>
@@ -670,14 +700,14 @@ export default function CommandCenter() {
                   <tr key={log.feedback_id} className="border-b border-panel-border/30">
                     <td className="py-3 data-value text-[0.6875rem]">{new Date(log.timestamp).toLocaleTimeString()}</td>
                     <td className="py-3 text-[0.8125rem] font-medium">{log.recommendation?.parameter_name || 'N/A'}</td>
-                    <td className="py-3 data-value text-[0.8125rem]">{log.recommendation?.recommended_value || '--'}</td>
+                    <td className="py-3 data-value text-[0.8125rem]">{log.recommendation?.recommended_value ?? '--'}</td>
                     <td className="py-3">
                       <span className={`inline-flex items-center gap-1 text-[0.625rem] font-medium px-2 py-0.5 rounded-full ${
-                        log.response === 'ACCEPTED' ? 'bg-status-stable/10 text-status-stable border border-status-stable/20' : 
+                        log.response === 'accept' ? 'bg-status-stable/10 text-status-stable border border-status-stable/20' : 
                         'bg-status-critical/10 text-status-critical border border-status-critical/20'
                       }`}>
-                        {log.response === 'ACCEPTED' ? <CheckCircle className="w-2.5 h-2.5" /> : <AlertTriangle className="w-2.5 h-2.5" />}
-                        {log.response}
+                        {log.response === 'accept' ? <CheckCircle className="w-2.5 h-2.5" /> : <AlertTriangle className="w-2.5 h-2.5" />}
+                        {log.response === 'accept' ? 'Accepted' : log.response === 'reject' ? 'Rejected' : log.response === 'modify' ? 'Modified' : log.response}
                       </span>
                     </td>
                     <td className="py-3 text-[0.6875rem] text-text-muted">Operator</td>
