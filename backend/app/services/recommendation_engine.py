@@ -82,8 +82,9 @@ class RecommendationEngine:
             # Simulate features after recommendation
             sim_features = current_features.copy()
             if cand["parameter"] == "stock_flow":
-                # Assuming setting new stock flow changes the ramp significantly
-                sim_features["stock_flow_ramp"] = (cand["value"] - current_features["current_bw"]) / 10.0 # Rough sim
+                sim_features["stock_flow_ramp"] = (cand["value"] - latest_pt.stock_flow_actual) / 15.0
+            elif cand["parameter"] == "machine_speed":
+                sim_features["machine_speed_ramp"] = (cand["value"] - latest_pt.machine_speed_actual) / 15.0
                 
             risk_res = risk_predictor_service.predict_risk(sim_features)
             stab_res = stabilization_service.estimate_stabilization(sim_features)

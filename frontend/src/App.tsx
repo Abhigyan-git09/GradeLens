@@ -39,11 +39,11 @@ function App() {
           {/* Logo & Title */}
           <div className="flex items-center gap-3">
             <motion.div
-              className="w-9 h-9 rounded-xl bg-gradient-to-br from-accent/90 to-status-predicted/80 flex items-center justify-center shadow-lg shadow-accent/10"
+              className="w-9 h-9 rounded-md bg-panel-elevated border border-accent/30 flex items-center justify-center shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_4px_6px_-1px_rgba(0,0,0,0.4)]"
               whileHover={{ scale: 1.05, rotate: -2 }}
               transition={{ type: 'spring', stiffness: 300, damping: 20 }}
             >
-              <Activity className="w-5 h-5 text-text-inverse" strokeWidth={2.5} />
+              <Activity className="w-5 h-5 text-accent" strokeWidth={2.5} />
             </motion.div>
             <div>
               <h1 className="text-[0.9375rem] font-semibold tracking-tight leading-none">

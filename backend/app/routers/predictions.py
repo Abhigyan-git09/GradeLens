@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from typing import List, Dict
 
-from app.schemas.domain import RiskPredictionSchema, TrajectoryPredictionSchema
+from app.schemas.domain import RiskPredictionSchema, TrajectoryPredictionSchema, StabilizationPredictionSchema
 
 router = APIRouter(prefix="/predictions", tags=["Predictions"])
 
@@ -15,3 +15,8 @@ def predict_risk(features: Dict):
 def predict_trajectory(features: Dict):
     from ml.trajectory_forecast import trajectory_forecaster_service
     return trajectory_forecaster_service.forecast(features)
+
+@router.post("/stabilization", response_model=StabilizationPredictionSchema)
+def predict_stabilization(features: Dict):
+    from ml.stabilization_service import stabilization_service
+    return stabilization_service.estimate_stabilization(features)

@@ -90,7 +90,9 @@ class CorrelationService:
                 
         # Persist to DB
         if relationships:
-            db.query(DiscoveredRelationship).delete() # Clear old ones for demo
+            db.query(DiscoveredRelationship).filter(DiscoveredRelationship.event_id == event_id).delete()
+            for r in relationships:
+                r.event_id = event_id
             db.add_all(relationships)
             db.commit()
 

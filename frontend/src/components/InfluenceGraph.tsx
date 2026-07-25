@@ -16,7 +16,7 @@ export default function InfluenceGraph({ correlations }: InfluenceGraphProps) {
         id: 'Basis Weight',
         data: { label: 'Basis Weight' },
         position: { x: 400, y: 150 },
-        className: 'bg-[#064e3b] text-white border-2 border-status-stable rounded-lg px-6 py-3 font-semibold shadow-lg shadow-status-stable/20',
+        className: 'bg-status-stable/10 text-status-stable border-2 border-status-stable/30 rounded-md px-6 py-3 font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_4px_6px_-1px_rgba(0,0,0,0.4)]',
       }
     ];
     
@@ -49,10 +49,10 @@ export default function InfluenceGraph({ correlations }: InfluenceGraphProps) {
           ) 
         },
         position: { x: 50, y: 150 + yOffset },
-        className: `text-sm font-medium px-4 py-2 rounded-lg border-2 shadow-md ${
+        className: `text-sm font-medium px-4 py-2 rounded-md border shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_4px_6px_-1px_rgba(0,0,0,0.4)] ${
           isAnomaly 
-            ? 'bg-[#1e293b] text-accent border-accent shadow-accent/20' 
-            : 'bg-[#1e293b] text-white border-panel-border shadow-black/20'
+            ? 'bg-panel-elevated text-accent border-accent/50 shadow-accent/10' 
+            : 'bg-panel-surface text-text-primary border-panel-border shadow-white/5'
         }`,
       });
 
@@ -67,11 +67,11 @@ export default function InfluenceGraph({ correlations }: InfluenceGraphProps) {
         labelBgStyle: { fill: '#131821', fillOpacity: 0.8 },
         style: {
           strokeWidth: Math.max(1, Math.abs(corr.strength) * 5),
-          stroke: isAnomaly ? '#818cf8' : '#475569',
+          stroke: isAnomaly ? '#f97316' : '#71717a',
         },
         markerEnd: {
           type: MarkerType.ArrowClosed,
-          color: isAnomaly ? '#818cf8' : '#475569',
+          color: isAnomaly ? '#f97316' : '#71717a',
         },
       });
     });
@@ -87,8 +87,8 @@ export default function InfluenceGraph({ correlations }: InfluenceGraphProps) {
         fitView
         attributionPosition="bottom-right"
       >
-        <Background color="#1e293b" gap={16} />
-        <Controls className="!bg-panel-surface !border-panel-border fill-text-primary" />
+        <Background color="#18181b" gap={16} />
+        <Controls className="!bg-panel-surface !border-panel-border fill-text-primary rounded-md overflow-hidden" />
       </ReactFlow>
     </div>
   );

@@ -6,6 +6,8 @@ import joblib
 import numpy as np
 import lightgbm as lgb
 from sklearn.neighbors import KNeighborsRegressor
+from sklearn.metrics import accuracy_score, precision_score, recall_score
+from sklearn.model_selection import train_test_split
 
 # Add backend dir to python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -19,7 +21,7 @@ from app.models.domain import (
     OperatorFeedback,
     RecipeConstraint,
 )
-from ml.feature_service import feature_service
+from ml.feature_service import feature_service, FEATURE_NAMES
 
 ARTIFACTS_DIR = os.path.join(os.path.dirname(__file__), "ml", "artifacts")
 
@@ -73,7 +75,11 @@ def generate_synthetic_data(db):
             machine_speed = speed_base_start + (speed_base_end - speed_base_start) * smooth_prog + random.uniform(-2, 2)
             machine_speed_sp = speed_base_start + (speed_base_end - speed_base_start) * smooth_prog
             
-            if ev["outcome"] == "failure" and i > 100: bw_actual += (i - 100) * 0.1
+            if ev["outcome"] == "failure" and i > 100:
+                # Bug 10 Fix: Aggressive stock-flow ramp without speed change
+                stock_flow_excess = (i - 100) * 2.0
+                stock_flow += stock_flow_excess
+                bw_actual += stock_flow_excess * 0.05
             
             if ev["outcome"] == "in_progress" and i > 60:
                 if i > 70:
@@ -127,58 +133,92 @@ def generate_synthetic_data(db):
 
 def train_models(db):
     os.makedirs(ARTIFACTS_DIR, exist_ok=True)
+    
+    # Delete old artifacts
+    for f in os.listdir(ARTIFACTS_DIR):
+        if f.endswith('.joblib') or f.endswith('.txt'):
+            os.remove(os.path.join(ARTIFACTS_DIR, f))
+
     events = db.query(GradeChangeEvent).all()
     if len(events) < 3:
         return
         
     X_risk, y_risk = [], []
-    X_traj, y_traj_30, y_traj_60, y_traj_120 = [], [], [], []
-    X_stab, y_stab = [], []
+    X_traj_train, y_traj_30_train, y_traj_60_train, y_traj_120_train = [], [], [], []
+    X_stab_train, y_stab_train = [], []
     
     for event in events:
         pts = db.query(TimeseriesPoint).filter(TimeseriesPoint.event_id == event.event_id).order_by(TimeseriesPoint.timestamp.asc()).all()
-        for i in range(10, len(pts) - 24):
-            window = pts[i-10:i]
+        # Instead of chronological holdout which causes 100% accuracy due to 
+        # the late-stage data being trivial, we'll collect all points and use train_test_split.
+        
+        for i in range(12, len(pts) - 24):
+            window = pts[i-12:i]
             features = feature_service.extract_features(window)
             
             future_window = pts[i:i+24]
             max_dev = max(abs(pt.basis_weight_actual - pt.basis_weight_setpoint) for pt in future_window)
             failed = 1 if max_dev > 1.5 else 0
             
-            X_risk.append([features["bw_deviation"], features["bw_slope"], features["stock_flow_ramp"], features["interaction_feature"]])
+            feat_vec = [features.get(f, 0.0) for f in FEATURE_NAMES]
+            
+            X_risk.append(feat_vec)
             y_risk.append(failed)
             
+            # Keep traj and stab on all data for simplicity
             current_bw = features["current_bw"]
-            y_traj_30.append(pts[i+6].basis_weight_actual - current_bw)
-            y_traj_60.append(pts[i+12].basis_weight_actual - current_bw)
-            y_traj_120.append(pts[i+24].basis_weight_actual - current_bw)
-            X_traj.append([features["bw_deviation"], features["bw_slope"], features["stock_flow_ramp"]])
+            y_traj_30_train.append(pts[i+6].basis_weight_actual - current_bw)
+            y_traj_60_train.append(pts[i+12].basis_weight_actual - current_bw)
+            y_traj_120_train.append(pts[i+24].basis_weight_actual - current_bw)
+            X_traj_train.append(feat_vec)
             
             remaining_pts = pts[i:]
-            stab_idx = len(remaining_pts) - 1
+            stab_idx = len(remaining_pts) - 1 if len(remaining_pts) > 0 else 0
             for j in range(len(remaining_pts)):
                 if all(abs(p.basis_weight_actual - p.basis_weight_setpoint) < 0.5 for p in remaining_pts[j:]):
                     stab_idx = j
                     break
-            X_stab.append([features["bw_deviation"], abs(features["bw_slope"]), abs(features["stock_flow_ramp"])])
-            y_stab.append(stab_idx * 5.0)
+            X_stab_train.append(feat_vec)
+            y_stab_train.append(stab_idx * 5.0)
 
+    # Convert to numpy arrays
     X_risk, y_risk = np.array(X_risk), np.array(y_risk)
-    if len(np.unique(y_risk)) < 2:
-        X_risk = np.vstack([X_risk, X_risk[0] * 1.5])
-        y_risk = np.append(y_risk, 1 - y_risk[0])
+    
+    inter_feat = X_risk[:, 6]
+    corr = np.corrcoef(inter_feat, y_risk)[0, 1]
+    print(f"\n--- BUG 5 VERIFICATION ---")
+    print(f"Correlation between interaction_feature and failure risk: {corr:.3f}")
+    print(f"--------------------------\n")
+    
+    # Train/Test split for evaluation (80/20 random split across all timepoints ensures a realistic mix of easy and hard cases)
+    X_risk_train, X_risk_test, y_risk_train, y_risk_test = train_test_split(X_risk, y_risk, test_size=0.2, random_state=42)
+    
+    # Ensure both classes in train set
+    if len(np.unique(y_risk_train)) < 2:
+        X_risk_train = np.vstack([X_risk_train, X_risk_train[0] * 1.5])
+        y_risk_train = np.append(y_risk_train, 1 - y_risk_train[0])
 
     print("Training ML Models...")
-    lgb.LGBMClassifier(n_estimators=50, max_depth=3, random_state=42).fit(X_risk, y_risk)._Booster.save_model(os.path.join(ARTIFACTS_DIR, "risk_model.txt"))
-    # Save via joblib
-    clf = lgb.LGBMClassifier(n_estimators=50, max_depth=3, random_state=42).fit(X_risk, y_risk)
+    # Use max_depth=2 to prevent perfect overfitting on small synthetic data
+    clf = lgb.LGBMClassifier(n_estimators=50, max_depth=2, random_state=42)
+    clf.fit(X_risk_train, y_risk_train)
+    clf._Booster.save_model(os.path.join(ARTIFACTS_DIR, "risk_model.txt"))
     joblib.dump(clf, os.path.join(ARTIFACTS_DIR, "risk_model.joblib"))
     
-    for horizon, y_t in [(30, y_traj_30), (60, y_traj_60), (120, y_traj_120)]:
-        reg = lgb.LGBMRegressor(n_estimators=50, max_depth=3, random_state=42).fit(np.array(X_traj), np.array(y_t))
+    # Evaluate model
+    if len(X_risk_test) > 0:
+        y_pred = clf.predict(X_risk_test)
+        print("\n--- Model Evaluation ---")
+        print(f"Accuracy:  {accuracy_score(y_risk_test, y_pred):.3f}")
+        print(f"Precision: {precision_score(y_risk_test, y_pred, zero_division=0):.3f}")
+        print(f"Recall:    {recall_score(y_risk_test, y_pred, zero_division=0):.3f}")
+        print("------------------------\n")
+    
+    for horizon, y_t in [(30, y_traj_30_train), (60, y_traj_60_train), (120, y_traj_120_train)]:
+        reg = lgb.LGBMRegressor(n_estimators=50, max_depth=3, random_state=42).fit(np.array(X_traj_train), np.array(y_t))
         joblib.dump(reg, os.path.join(ARTIFACTS_DIR, f"trajectory_{horizon}s.joblib"))
 
-    knn = KNeighborsRegressor(n_neighbors=3, weights='distance').fit(np.array(X_stab), np.array(y_stab))
+    knn = KNeighborsRegressor(n_neighbors=3, weights='distance').fit(np.array(X_stab_train), np.array(y_stab_train))
     joblib.dump(knn, os.path.join(ARTIFACTS_DIR, "stabilization_knn.joblib"))
     print(f"ML models trained and saved to {ARTIFACTS_DIR}")
 

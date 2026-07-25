@@ -4,6 +4,7 @@ import type {
   TimeseriesPoint,
   RiskPrediction,
   TrajectoryPrediction,
+  StabilizationPrediction,
   RootCause,
   Recommendation,
   OperatorFeedback,
@@ -42,6 +43,9 @@ export const getRiskPrediction = (data: Record<string, number>) =>
 export const getTrajectoryPrediction = (data: Record<string, number>) =>
   api.post<TrajectoryPrediction>('/predictions/trajectory', data).then((r) => r.data);
 
+export const getStabilizationPrediction = (data: Record<string, number>) =>
+  api.post<StabilizationPrediction>('/predictions/stabilization', data).then((r) => r.data);
+
 // ---- Root Causes ----
 export const getRootCauses = (eventId: string) =>
   api.get<RootCause[]>(`/grade-changes/${eventId}/root-causes`).then((r) => r.data);
@@ -63,8 +67,8 @@ export const modifyRecommendation = (id: string, value: number) =>
   api.post<OperatorFeedback>(`/recommendations/${id}/modify`, { value }).then((r) => r.data);
 
 // ---- Correlations (stretch) ----
-export const getCorrelations = () =>
-  api.get<DiscoveredRelationship[]>('/correlations').then((r) => r.data);
+export const getCorrelations = (eventId: string) =>
+  api.get<DiscoveredRelationship[]>('/correlations', { params: { event_id: eventId } }).then((r) => r.data);
 
 // ---- Audit ----
 export const getAuditLog = () =>

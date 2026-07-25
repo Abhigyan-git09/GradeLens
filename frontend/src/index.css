@@ -1,47 +1,47 @@
 @import "tailwindcss";
 
 /* =====================================================
-   GradeLens Design System — Control Room Aesthetic
+   GradeLens Design System — Heavy Industry Control Room
    Taste: Cockpit Dense (8), Offset Asymmetric (6), Fluid CSS (7)
    ===================================================== */
 
 @theme {
-  /* ---- Base: Deep graphite panels — never pure black ---- */
-  --color-panel-bg: #0f1117;
-  --color-panel-surface: #161b26;
-  --color-panel-elevated: #1c2333;
-  --color-panel-border: #262f3d;
-  --color-panel-hover: #1f2937;
+  /* ---- Base: Deep Zinc panels — calibrated technical gray ---- */
+  --color-panel-bg: #09090b; /* zinc-950 */
+  --color-panel-surface: #18181b; /* zinc-900 */
+  --color-panel-elevated: #27272a; /* zinc-800 */
+  --color-panel-border: #3f3f46; /* zinc-700 */
+  --color-panel-hover: #3f3f46;
 
-  /* ---- Status: Always paired with text label or icon ---- */
-  --color-status-stable: #34d399;
-  --color-status-warning: #fbbf24;
-  --color-status-critical: #f87171;
-  --color-status-predicted: #60a5fa;
-  --color-status-info: #818cf8;
+  /* ---- Status: High-contrast semantic accents ---- */
+  --color-status-stable: #22c55e; /* laser green */
+  --color-status-warning: #eab308; /* caution yellow */
+  --color-status-critical: #ef4444; /* critical red */
+  --color-status-predicted: #3b82f6; 
+  --color-status-info: #6366f1;
 
   /* ---- Text: Layered hierarchy ---- */
-  --color-text-primary: #e2e8f0;
-  --color-text-secondary: #94a3b8;
-  --color-text-muted: #475569;
-  --color-text-inverse: #0f172a;
+  --color-text-primary: #f4f4f5; /* zinc-50 */
+  --color-text-secondary: #a1a1aa; /* zinc-400 */
+  --color-text-muted: #71717a; /* zinc-500 */
+  --color-text-inverse: #09090b;
 
-  /* ---- Accent: Singular cyan-teal — saturation < 80% ---- */
-  --color-accent: #22d3ee;
-  --color-accent-dim: rgba(34, 211, 238, 0.12);
-  --color-accent-border: rgba(34, 211, 238, 0.25);
+  /* ---- Accent: Hazard Orange ---- */
+  --color-accent: #f97316; /* orange-500 */
+  --color-accent-dim: rgba(249, 115, 22, 0.12);
+  --color-accent-border: rgba(249, 115, 22, 0.25);
 
   /* ---- Chart ---- */
-  --color-chart-actual: #e2e8f0;
-  --color-chart-setpoint: #818cf8;
-  --color-chart-forecast: #60a5fa;
-  --color-chart-recommended: #34d399;
-  --color-chart-limit-band: rgba(248, 113, 113, 0.08);
-  --color-chart-limit-line: rgba(248, 113, 113, 0.45);
+  --color-chart-actual: #f4f4f5;
+  --color-chart-setpoint: #a1a1aa;
+  --color-chart-forecast: #3b82f6;
+  --color-chart-recommended: #f97316;
+  --color-chart-limit-band: rgba(239, 68, 68, 0.08);
+  --color-chart-limit-line: rgba(239, 68, 68, 0.45);
 
   /* ---- Typography: Geist + JetBrains Mono (Inter BANNED) ---- */
-  --font-sans: 'Outfit', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  --font-sans: 'Geist', 'Outfit', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Geist Mono', 'Fira Code', ui-monospace, monospace;
 
   /* ---- Spacing ---- */
   --spacing-xs: 0.25rem;
@@ -50,15 +50,15 @@
   --spacing-lg: 1.5rem;
   --spacing-xl: 2rem;
 
-  /* ---- Border Radius ---- */
-  --radius-sm: 0.375rem;
-  --radius-md: 0.625rem;
-  --radius-lg: 0.875rem;
-  --radius-xl: 1.25rem;
+  /* ---- Border Radius: Crisp, hardware-like ---- */
+  --radius-sm: 0.125rem;
+  --radius-md: 0.25rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
 }
 
 /* =====================================================
-   Global Reset
+   Global Reset & Texture
    ===================================================== */
 
 html {
@@ -73,10 +73,37 @@ body {
   margin: 0;
   min-height: 100dvh;
   background-color: var(--color-panel-bg);
+  background-image: 
+    linear-gradient(rgba(24, 24, 27, 0.7) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(24, 24, 27, 0.7) 1px, transparent 1px);
+  background-size: 40px 40px;
+  position: relative;
+}
+
+/* Faint scanline overlay */
+body::after {
+  content: "";
+  position: fixed;
+  top: 0; left: 0; width: 100vw; height: 100vh;
+  background: linear-gradient(
+    to bottom,
+    rgba(255,255,255,0),
+    rgba(255,255,255,0) 50%,
+    rgba(0,0,0,0.05) 50%,
+    rgba(0,0,0,0.05)
+  );
+  background-size: 100% 4px;
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* Headings: Tighter tracking */
+h1, h2, h3, h4, h5, h6 {
+  letter-spacing: -0.04em;
 }
 
 /* =====================================================
-   Data Values — always monospace, tabular numerals
+   Data Values — Technical monospaced fonts
    ===================================================== */
 
 .data-value {
@@ -87,60 +114,51 @@ body {
 
 /* =====================================================
    Panel — the primary container primitive
-   Glass-morphism with tinted border glow
+   Heavy-industry inset panels
    ===================================================== */
 
 .panel {
-  background: linear-gradient(
-    145deg,
-    rgba(22, 27, 38, 0.92) 0%,
-    rgba(15, 17, 23, 0.96) 100%
-  );
+  background: var(--color-panel-surface);
   border: 1px solid var(--color-panel-border);
-  border-radius: var(--radius-lg);
-  backdrop-filter: blur(12px);
-  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+  border-radius: var(--radius-md);
+  /* Premium inner shadow for hardware feel */
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.05),
+              0 4px 6px -1px rgba(0,0,0,0.4);
+  transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275), box-shadow 0.3s ease, border-color 0.3s ease;
 }
 
 .panel:hover {
-  border-color: var(--color-accent-border);
-  box-shadow: 0 0 0 1px var(--color-accent-border),
-              0 8px 32px -8px rgba(0, 0, 0, 0.4);
+  border-color: var(--color-text-muted);
 }
 
 /* =====================================================
-   Status Glow Variants — layered shadows for depth
+   Status Glow Variants
    ===================================================== */
 
 .status-glow-stable {
-  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.2),
-              0 0 12px -2px rgba(52, 211, 153, 0.15);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 0 0 1px rgba(34, 197, 94, 0.2), 0 0 12px -2px rgba(34, 197, 94, 0.15);
 }
 
 .status-glow-warning {
-  box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.2),
-              0 0 12px -2px rgba(251, 191, 36, 0.15);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 0 0 1px rgba(234, 179, 8, 0.3), 0 0 12px -2px rgba(234, 179, 8, 0.2);
 }
 
 .status-glow-critical {
-  box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.25),
-              0 0 16px -2px rgba(248, 113, 113, 0.2);
-  animation: pulse-critical 2.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 0 0 1px rgba(239, 68, 68, 0.4), 0 0 16px -2px rgba(239, 68, 68, 0.3);
+  animation: pulse-critical 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
 @keyframes pulse-critical {
   0%, 100% {
-    box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.2),
-                0 0 12px -2px rgba(248, 113, 113, 0.1);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 0 0 1px rgba(239, 68, 68, 0.3), 0 0 12px -2px rgba(239, 68, 68, 0.2);
   }
   50% {
-    box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.35),
-                0 0 24px -2px rgba(248, 113, 113, 0.25);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 0 0 1px rgba(239, 68, 68, 0.6), 0 0 24px -2px rgba(239, 68, 68, 0.4);
   }
 }
 
 /* =====================================================
-   Accent Stripe — top border accent on key panels
+   Accent Stripe
    ===================================================== */
 
 .panel-accent {
@@ -151,53 +169,35 @@ body {
 .panel-accent::before {
   content: '';
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 2px;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    var(--color-accent) 30%,
-    var(--color-accent) 70%,
-    transparent 100%
-  );
-  opacity: 0.6;
+  top: 0; left: 0; right: 0; height: 3px;
+  background: var(--color-accent);
 }
 
 /* =====================================================
    Perpetual Micro-Interactions
    ===================================================== */
 
-/* Live data pulse — shows data is streaming */
 @keyframes data-pulse {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+  50% { opacity: 0.3; }
 }
 
 .live-indicator {
   animation: data-pulse 2s ease-in-out infinite;
 }
 
-/* Shimmer for skeleton loaders */
 @keyframes shimmer {
   0% { background-position: -200% 0; }
   100% { background-position: 200% 0; }
 }
 
 .skeleton {
-  background: linear-gradient(
-    90deg,
-    var(--color-panel-surface) 25%,
-    var(--color-panel-elevated) 50%,
-    var(--color-panel-surface) 75%
-  );
+  background: linear-gradient(90deg, var(--color-panel-surface) 25%, var(--color-panel-elevated) 50%, var(--color-panel-surface) 75%);
   background-size: 200% 100%;
-  animation: shimmer 1.8s ease-in-out infinite;
+  animation: shimmer 1.5s ease-in-out infinite;
   border-radius: var(--radius-sm);
 }
 
-/* Subtle float for accent elements */
 @keyframes float {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-3px); }
@@ -208,51 +208,41 @@ body {
 }
 
 /* =====================================================
-   Risk Level Bars — gradient fills
+   Risk Level Bars
    ===================================================== */
 
 .risk-bar-bg {
   background: var(--color-panel-border);
-  border-radius: 999px;
+  border-radius: 0;
   overflow: hidden;
 }
 
 .risk-bar-fill {
   height: 100%;
-  border-radius: 999px;
+  border-radius: 0;
   transition: width 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
-.risk-fill-low {
-  background: linear-gradient(90deg, #059669, #34d399);
-}
-
-.risk-fill-moderate {
-  background: linear-gradient(90deg, #d97706, #fbbf24);
-}
-
-.risk-fill-high {
-  background: linear-gradient(90deg, #dc2626, #f87171);
-}
-
-.risk-fill-critical {
-  background: linear-gradient(90deg, #b91c1c, #ef4444);
-}
+.risk-fill-low { background: var(--color-status-stable); }
+.risk-fill-moderate { background: var(--color-status-warning); }
+.risk-fill-high { background: var(--color-accent); }
+.risk-fill-critical { background: var(--color-status-critical); }
 
 /* =====================================================
-   Evidence Tag — clickable chip
+   Evidence Tag
    ===================================================== */
 
 .evidence-tag {
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
-  padding: 0.25rem 0.625rem;
-  font-size: 0.75rem;
-  font-weight: 500;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
   border: 1px solid var(--color-panel-border);
-  border-radius: 999px;
-  background: var(--color-panel-surface);
+  border-radius: var(--radius-sm);
+  background: var(--color-panel-elevated);
   color: var(--color-text-secondary);
   cursor: pointer;
   transition: all 0.2s ease;
@@ -260,8 +250,7 @@ body {
 }
 
 .evidence-tag:hover {
-  border-color: var(--color-accent-border);
-  background: var(--color-accent-dim);
+  border-color: var(--color-accent);
   color: var(--color-accent);
 }
 
@@ -272,7 +261,7 @@ body {
 }
 
 /* =====================================================
-   Action Buttons — tactile push feedback
+   Action Buttons
    ===================================================== */
 
 .btn {
@@ -283,11 +272,13 @@ body {
   padding: 0.5rem 1.25rem;
   font-size: 0.8125rem;
   font-weight: 600;
-  border-radius: var(--radius-md);
+  letter-spacing: 0.02em;
+  border-radius: var(--radius-sm);
   border: 1px solid transparent;
   cursor: pointer;
   transition: all 0.15s ease;
   font-family: var(--font-sans);
+  text-transform: uppercase;
 }
 
 .btn:active {
@@ -295,24 +286,25 @@ body {
 }
 
 .btn-primary {
-  background: var(--color-status-stable);
+  background: var(--color-accent);
   color: var(--color-text-inverse);
-  border-color: var(--color-status-stable);
+  border-color: var(--color-accent);
+  box-shadow: 0 0 10px rgba(249, 115, 22, 0.3);
 }
 
 .btn-primary:hover {
-  background: #2bc489;
-  box-shadow: 0 4px 12px -2px rgba(52, 211, 153, 0.3);
+  background: #ea580c; /* orange-600 */
+  box-shadow: 0 0 15px rgba(249, 115, 22, 0.5);
 }
 
 .btn-danger {
   background: transparent;
   color: var(--color-status-critical);
-  border-color: rgba(248, 113, 113, 0.3);
+  border-color: rgba(239, 68, 68, 0.4);
 }
 
 .btn-danger:hover {
-  background: rgba(248, 113, 113, 0.08);
+  background: rgba(239, 68, 68, 0.1);
   border-color: var(--color-status-critical);
 }
 
@@ -323,41 +315,35 @@ body {
 }
 
 .btn-outline:hover {
-  background: var(--color-panel-hover);
-  border-color: var(--color-accent-border);
-  color: var(--color-accent);
+  background: var(--color-panel-elevated);
+  border-color: var(--color-text-muted);
+  color: var(--color-text-primary);
 }
 
 /* =====================================================
-   Scrollbar — minimal
+   Scrollbar
    ===================================================== */
 
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: var(--color-panel-bg);
 }
 
 ::-webkit-scrollbar-thumb {
   background: var(--color-panel-border);
-  border-radius: 999px;
+  border-radius: 0;
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-muted);
 }
 
-/* =====================================================
-   Reduced Motion
-   ===================================================== */
-
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  *, *::before, *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;

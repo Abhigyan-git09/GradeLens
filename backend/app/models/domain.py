@@ -79,7 +79,7 @@ class Recommendation(Base):
 
     event = relationship("GradeChangeEvent", back_populates="recommendations")
     feedback = relationship("OperatorFeedback", back_populates="recommendation", uselist=False, cascade="all, delete-orphan")
-    evidence = relationship("EvidenceTag", back_populates="recommendation", cascade="all, delete-orphan")
+    evidence_tags = relationship("EvidenceTag", back_populates="recommendation", cascade="all, delete-orphan")
 
 class EvidenceTag(Base):
     __tablename__ = "evidence_tags"
@@ -90,7 +90,7 @@ class EvidenceTag(Base):
     source = Column(String)
     detail = Column(String)
 
-    recommendation = relationship("Recommendation", back_populates="evidence")
+    recommendation = relationship("Recommendation", back_populates="evidence_tags")
 
 class OperatorFeedback(Base):
     __tablename__ = "operator_feedback"
@@ -119,6 +119,7 @@ class DiscoveredRelationship(Base):
     __tablename__ = "discovered_relationships"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    event_id = Column(String, index=True)
     source_parameter = Column(String)
     target_parameter = Column(String)
     strength = Column(Float)

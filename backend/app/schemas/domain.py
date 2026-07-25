@@ -101,7 +101,13 @@ class TrajectoryPredictionSchema(BaseModel):
     horizons: List[TrajectoryHorizonSchema]
     model_mode: str
 
+class StabilizationPredictionSchema(BaseModel):
+    estimated_seconds: float
+    similar_events_used: int
+    model_mode: str
+
 class DiscoveredRelationshipSchema(BaseModel):
+    event_id: str
     source_parameter: str
     target_parameter: str
     strength: float

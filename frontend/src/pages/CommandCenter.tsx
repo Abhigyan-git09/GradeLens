@@ -26,6 +26,7 @@ import {
   getAuditLog,
   getRiskPrediction,
   getTrajectoryPrediction,
+  getStabilizationPrediction,
   generateRecommendation,
   acceptRecommendation,
   rejectRecommendation,
@@ -204,7 +205,7 @@ export default function CommandCenter() {
   const currentPoint = timeseries && timeseries.length > 0 ? timeseries[timeseries.length - 1] : null
 
   // Simulator State
-  const [simulatedValue, setSimulatedValue] = useState<number | null>(null)
+  const [simulatedValue, setSimulatedValue] = useState<{ parameter: string, value: number } | null>(null)
 
   // Helper: compute interaction feature from timeseries data
   const computeInteractionFeature = (ts: typeof timeseries) => {
@@ -225,15 +226,24 @@ export default function CommandCenter() {
       if (!currentPoint) return null;
       const prevPoint = timeseries && timeseries.length > 5 ? timeseries[timeseries.length - 5] : currentPoint;
       
-      let ramp = (currentPoint.stock_flow_actual - prevPoint.stock_flow_actual) / 5.0;
+      let sf_ramp = (currentPoint.stock_flow_actual - prevPoint.stock_flow_actual) / 5.0;
+      let ms_ramp = (currentPoint.machine_speed_actual - prevPoint.machine_speed_actual) / 5.0;
+
       if (simulatedValue !== null) {
-        ramp = (simulatedValue - currentPoint.stock_flow_actual) / 15.0;
+        if (simulatedValue.parameter === 'Stock Flow') {
+          sf_ramp = (simulatedValue.value - currentPoint.stock_flow_actual) / 15.0;
+        } else if (simulatedValue.parameter === 'Machine Speed') {
+          ms_ramp = (simulatedValue.value - currentPoint.machine_speed_actual) / 15.0;
+        }
       }
 
       return getRiskPrediction({
         bw_deviation: currentPoint.basis_weight_actual - currentPoint.basis_weight_setpoint,
         bw_slope: (currentPoint.basis_weight_actual - prevPoint.basis_weight_actual) / 5.0,
-        stock_flow_ramp: ramp,
+        stock_flow_ramp: sf_ramp,
+        machine_speed_ramp: ms_ramp,
+        steam_pressure_slope: (currentPoint.steam_pressure_actual - prevPoint.steam_pressure_actual) / 5.0,
+        filler_flow_ramp: (currentPoint.filler_flow_actual - prevPoint.filler_flow_actual) / 5.0,
         interaction_feature: computeInteractionFeature(timeseries),
         current_bw: currentPoint.basis_weight_actual
       })
@@ -248,15 +258,56 @@ export default function CommandCenter() {
       if (!currentPoint) return null;
       const prevPoint = timeseries && timeseries.length > 5 ? timeseries[timeseries.length - 5] : currentPoint;
       
-      let ramp = (currentPoint.stock_flow_actual - prevPoint.stock_flow_actual) / 5.0;
+      let sf_ramp = (currentPoint.stock_flow_actual - prevPoint.stock_flow_actual) / 5.0;
+      let ms_ramp = (currentPoint.machine_speed_actual - prevPoint.machine_speed_actual) / 5.0;
+
       if (simulatedValue !== null) {
-        ramp = (simulatedValue - currentPoint.stock_flow_actual) / 15.0;
+        if (simulatedValue.parameter === 'Stock Flow') {
+          sf_ramp = (simulatedValue.value - currentPoint.stock_flow_actual) / 15.0;
+        } else if (simulatedValue.parameter === 'Machine Speed') {
+          ms_ramp = (simulatedValue.value - currentPoint.machine_speed_actual) / 15.0;
+        }
       }
 
       return getTrajectoryPrediction({
         bw_deviation: currentPoint.basis_weight_actual - currentPoint.basis_weight_setpoint,
         bw_slope: (currentPoint.basis_weight_actual - prevPoint.basis_weight_actual) / 5.0,
-        stock_flow_ramp: ramp,
+        stock_flow_ramp: sf_ramp,
+        machine_speed_ramp: ms_ramp,
+        steam_pressure_slope: (currentPoint.steam_pressure_actual - prevPoint.steam_pressure_actual) / 5.0,
+        filler_flow_ramp: (currentPoint.filler_flow_actual - prevPoint.filler_flow_actual) / 5.0,
+        interaction_feature: computeInteractionFeature(timeseries),
+        current_bw: currentPoint.basis_weight_actual
+      })
+    },
+    enabled: !!currentPoint,
+  })
+
+  // 4.5 Live Stabilization Prediction
+  const { data: stabilizationData } = useQuery({
+    queryKey: ['stabilization', eventId, currentPoint?.timestamp, simulatedValue],
+    queryFn: async () => {
+      if (!currentPoint) return null;
+      const prevPoint = timeseries && timeseries.length > 5 ? timeseries[timeseries.length - 5] : currentPoint;
+      
+      let sf_ramp = (currentPoint.stock_flow_actual - prevPoint.stock_flow_actual) / 5.0;
+      let ms_ramp = (currentPoint.machine_speed_actual - prevPoint.machine_speed_actual) / 5.0;
+
+      if (simulatedValue !== null) {
+        if (simulatedValue.parameter === 'Stock Flow') {
+          sf_ramp = (simulatedValue.value - currentPoint.stock_flow_actual) / 15.0;
+        } else if (simulatedValue.parameter === 'Machine Speed') {
+          ms_ramp = (simulatedValue.value - currentPoint.machine_speed_actual) / 15.0;
+        }
+      }
+
+      return getStabilizationPrediction({
+        bw_deviation: currentPoint.basis_weight_actual - currentPoint.basis_weight_setpoint,
+        bw_slope: (currentPoint.basis_weight_actual - prevPoint.basis_weight_actual) / 5.0,
+        stock_flow_ramp: sf_ramp,
+        machine_speed_ramp: ms_ramp,
+        steam_pressure_slope: (currentPoint.steam_pressure_actual - prevPoint.steam_pressure_actual) / 5.0,
+        filler_flow_ramp: (currentPoint.filler_flow_actual - prevPoint.filler_flow_actual) / 5.0,
         interaction_feature: computeInteractionFeature(timeseries),
         current_bw: currentPoint.basis_weight_actual
       })
@@ -282,7 +333,7 @@ export default function CommandCenter() {
     try {
       const rec = await generateRecommendation({ event_id: eventId, timestamp: new Date().toISOString() })
       setCurrentRec(rec)
-      setSimulatedValue(rec.recommended_value)
+      setSimulatedValue({ parameter: rec.parameter_name, value: rec.recommended_value })
     } catch (e) {
       console.error(e)
     }
@@ -325,8 +376,9 @@ export default function CommandCenter() {
   
   // 9. Correlations for Influence Graph
   const { data: correlations } = useQuery({
-    queryKey: ['correlations'],
-    queryFn: () => getCorrelations(),
+    queryKey: ['correlations', eventId],
+    queryFn: () => getCorrelations(eventId),
+    enabled: !!eventId,
   })
 
   return (
@@ -485,7 +537,12 @@ export default function CommandCenter() {
               Stabilization
             </h3>
             <div className="flex items-baseline gap-1.5 mb-1">
-              {eventData?.stabilization_seconds ? (
+              {stabilizationData?.estimated_seconds !== undefined ? (
+                <>
+                  <span className="data-value text-lg font-semibold">{Math.round(stabilizationData.estimated_seconds / 60)}</span>
+                  <span className="text-xs text-text-muted font-medium">min remaining</span>
+                </>
+              ) : eventData?.stabilization_seconds ? (
                 <>
                   <span className="data-value text-lg font-semibold">{Math.round(eventData.stabilization_seconds / 60)}</span>
                   <span className="text-xs text-text-muted font-medium">min remaining</span>
@@ -495,7 +552,7 @@ export default function CommandCenter() {
               )}
             </div>
             <p className="text-[0.6875rem] text-text-muted">
-              Based on similar transitions (k-NN)
+              {stabilizationData?.similar_events_used !== undefined ? `Based on ${stabilizationData.similar_events_used} similar transitions (k-NN)` : 'Based on similar transitions (k-NN)'}
             </p>
           </div>
         </motion.div>
@@ -567,10 +624,10 @@ export default function CommandCenter() {
               <div className="bg-panel-bg/60 rounded-xl p-4 mb-4 border border-panel-border/50">
                 <div className="flex items-center gap-2 mb-3">
                   <div className="w-8 h-8 rounded-lg bg-status-stable/10 flex items-center justify-center">
-                    {simulatedValue !== null && simulatedValue < currentRec.current_value ? <TrendingDown className="w-4 h-4 text-status-stable" /> : <TrendingUp className="w-4 h-4 text-status-stable" />}
+                    {simulatedValue !== null && simulatedValue.value < currentRec.current_value ? <TrendingDown className="w-4 h-4 text-status-stable" /> : <TrendingUp className="w-4 h-4 text-status-stable" />}
                   </div>
                   <div>
-                    <p className="text-sm font-semibold">{simulatedValue !== null && simulatedValue < currentRec.current_value ? 'Reduce' : 'Increase'} {currentRec.parameter_name} Setpoint</p>
+                    <p className="text-sm font-semibold">{simulatedValue !== null && simulatedValue.value < currentRec.current_value ? 'Reduce' : 'Increase'} {currentRec.parameter_name} Setpoint</p>
                     <p className="text-[0.6875rem] text-text-muted">{currentRec.rationale}</p>
                   </div>
                 </div>
@@ -582,12 +639,12 @@ export default function CommandCenter() {
                   </div>
                   <div className="bg-status-stable/5 rounded-lg p-3 text-center border border-status-stable/15 relative">
                     <p className="text-[0.625rem] text-status-stable mb-1 uppercase tracking-wider font-medium">Recommended</p>
-                    <p className="data-value text-base font-bold text-status-stable">{simulatedValue}</p>
+                    <p className="data-value text-base font-bold text-status-stable">{simulatedValue?.value}</p>
                   </div>
                   <div className="bg-panel-surface/50 rounded-lg p-3 text-center">
                     <p className="text-[0.625rem] text-text-muted mb-1 uppercase tracking-wider">Sim Ramp</p>
                     <p className="data-value text-base font-semibold">
-                      {simulatedValue !== null && currentPoint ? ((simulatedValue - currentPoint.stock_flow_actual) / 15.0).toFixed(1) : currentRec.recommended_ramp_rate}
+                      {simulatedValue !== null && currentPoint ? ((simulatedValue.value - (simulatedValue.parameter === 'Stock Flow' ? currentPoint.stock_flow_actual : currentPoint.machine_speed_actual)) / 15.0).toFixed(1) : currentRec.recommended_ramp_rate}
                     </p>
                     <p className="text-[0.625rem] text-text-muted">/s</p>
                   </div>
@@ -603,8 +660,8 @@ export default function CommandCenter() {
                     type="range" 
                     min={currentRec.current_value * 0.9} 
                     max={currentRec.current_value * 1.1} 
-                    value={simulatedValue ?? currentRec.recommended_value}
-                    onChange={(e) => setSimulatedValue(Number(e.target.value))}
+                    value={simulatedValue?.value ?? currentRec.recommended_value}
+                    onChange={(e) => setSimulatedValue({ parameter: currentRec.parameter_name, value: Number(e.target.value) })}
                     className="w-full accent-accent h-1.5 bg-panel-surface rounded-lg appearance-none cursor-pointer"
                   />
                   <div className="flex justify-between text-[0.625rem] text-text-muted mt-1">
@@ -662,7 +719,7 @@ export default function CommandCenter() {
                   Reject
                 </button>
                 <button
-                  onClick={() => modifyMutation.mutate({ id: currentRec.recommendation_id, value: simulatedValue ?? currentRec.recommended_value })}
+                  onClick={() => modifyMutation.mutate({ id: currentRec.recommendation_id, value: simulatedValue?.value ?? currentRec.recommended_value })}
                   className="btn btn-outline"
                   disabled={modifyMutation.isPending}
                 >
@@ -743,7 +800,7 @@ export default function CommandCenter() {
               Visualizing Pearson/Spearman correlations across parameter time-lags
             </p>
           </div>
-          <span className="evidence-tag bg-accent/10 border-accent/20 text-accent">Physics Model</span>
+          <span className="evidence-tag bg-accent/10 border-accent/20 text-accent">{correlations?.length ?? 0} Relationships</span>
         </div>
         <InfluenceGraph correlations={correlations || []} />
       </motion.div>

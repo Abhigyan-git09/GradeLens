@@ -59,6 +59,13 @@ export interface TrajectoryPrediction {
   model_mode: 'trained' | 'degraded' | 'demo';
 }
 
+// ---- Stabilization Prediction ----
+export interface StabilizationPrediction {
+  estimated_seconds: number;
+  similar_events_used: number;
+  model_mode: 'trained' | 'degraded' | 'demo';
+}
+
 // ---- Root Cause ----
 export interface RootCause {
   parameter_name: string;
