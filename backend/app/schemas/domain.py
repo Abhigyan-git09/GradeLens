@@ -117,3 +117,14 @@ class DiscoveredRelationshipSchema(BaseModel):
     sample_note: str
 
     model_config = ConfigDict(from_attributes=True)
+
+class SnapshotResponseSchema(BaseModel):
+    event: GradeChangeEventSchema
+    timeseries: List[TimeseriesPointSchema]
+    current_features: Optional[dict] = None
+    risk: Optional[RiskPredictionSchema] = None
+    trajectory: Optional[TrajectoryPredictionSchema] = None
+    stabilization: Optional[StabilizationPredictionSchema] = None
+    root_causes: List[RootCauseSchema] = []
+    recommendation: Optional[RecommendationSchema] = None
+    correlations: List[DiscoveredRelationshipSchema] = []

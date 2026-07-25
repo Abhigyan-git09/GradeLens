@@ -22,11 +22,8 @@ import {
 import {
   getGradeChange,
   getTimeseries,
-  getRootCauses,
   getAuditLog,
-  getRiskPrediction,
-  getTrajectoryPrediction,
-  getStabilizationPrediction,
+  getSnapshot,
   generateRecommendation,
   acceptRecommendation,
   rejectRecommendation,
@@ -240,119 +237,22 @@ export default function CommandCenter() {
   // Simulator State
   const [simulatedValue, setSimulatedValue] = useState<{ parameter: string, value: number } | null>(null)
 
-  // Helper: compute interaction feature from timeseries data
-  // Aligned with backend feature_service.py: (latest - 45s_ago) for both filler and steam
-  const computeInteractionFeature = (ts: typeof timeseries) => {
-    if (!ts || ts.length < 12) return 0.0;
-    const latest = ts[ts.length - 1];
-    const lag45 = ts[ts.length - 10]; // 9 intervals * 5s = 45s trailing window
-    const fillerRamp = latest.filler_flow_actual - lag45.filler_flow_actual;
-    const steamSlope = latest.steam_pressure_actual - lag45.steam_pressure_actual;
-    return fillerRamp * steamSlope;
-  };
-
-  // 3. Live Risk Prediction
-  const { data: riskData } = useQuery({
-    queryKey: ['risk', eventId, currentPoint?.timestamp, simulatedValue],
+  // 3. Unified Snapshot (Replaces individual ML queries)
+  const { data: snapshot } = useQuery({
+    queryKey: ['snapshot', eventId, currentPoint?.timestamp],
     queryFn: async () => {
       if (!currentPoint) return null;
-      const prevPoint = visibleTimeseries && visibleTimeseries.length > 5 ? visibleTimeseries[visibleTimeseries.length - 5] : currentPoint;
-      
-      let sf_ramp = (currentPoint.stock_flow_actual - prevPoint.stock_flow_actual) / 5.0;
-      let ms_ramp = (currentPoint.machine_speed_actual - prevPoint.machine_speed_actual) / 5.0;
-
-      if (simulatedValue !== null) {
-        if (simulatedValue.parameter === 'Stock Flow') {
-          sf_ramp = (simulatedValue.value - currentPoint.stock_flow_actual) / 15.0;
-        } else if (simulatedValue.parameter === 'Machine Speed') {
-          ms_ramp = (simulatedValue.value - currentPoint.machine_speed_actual) / 15.0;
-        }
-      }
-
-      return getRiskPrediction({
-        bw_deviation: currentPoint.basis_weight_actual - currentPoint.basis_weight_setpoint,
-        bw_slope: (currentPoint.basis_weight_actual - prevPoint.basis_weight_actual) / 5.0,
-        stock_flow_ramp: sf_ramp,
-        machine_speed_ramp: ms_ramp,
-        steam_pressure_slope: (currentPoint.steam_pressure_actual - prevPoint.steam_pressure_actual) / 5.0,
-        filler_flow_ramp: (currentPoint.filler_flow_actual - prevPoint.filler_flow_actual) / 5.0,
-        interaction_feature: computeInteractionFeature(visibleTimeseries),
-        current_bw: currentPoint.basis_weight_actual
-      })
+      return getSnapshot(eventId, currentPoint.timestamp);
     },
     enabled: !!currentPoint,
   })
 
-  // 4. Live Trajectory Prediction
-  const { data: trajectoryData } = useQuery({
-    queryKey: ['trajectory', eventId, currentPoint?.timestamp, simulatedValue],
-    queryFn: async () => {
-      if (!currentPoint) return null;
-      const prevPoint = visibleTimeseries && visibleTimeseries.length > 5 ? visibleTimeseries[visibleTimeseries.length - 5] : currentPoint;
-      
-      let sf_ramp = (currentPoint.stock_flow_actual - prevPoint.stock_flow_actual) / 5.0;
-      let ms_ramp = (currentPoint.machine_speed_actual - prevPoint.machine_speed_actual) / 5.0;
-
-      if (simulatedValue !== null) {
-        if (simulatedValue.parameter === 'Stock Flow') {
-          sf_ramp = (simulatedValue.value - currentPoint.stock_flow_actual) / 15.0;
-        } else if (simulatedValue.parameter === 'Machine Speed') {
-          ms_ramp = (simulatedValue.value - currentPoint.machine_speed_actual) / 15.0;
-        }
-      }
-
-      return getTrajectoryPrediction({
-        bw_deviation: currentPoint.basis_weight_actual - currentPoint.basis_weight_setpoint,
-        bw_slope: (currentPoint.basis_weight_actual - prevPoint.basis_weight_actual) / 5.0,
-        stock_flow_ramp: sf_ramp,
-        machine_speed_ramp: ms_ramp,
-        steam_pressure_slope: (currentPoint.steam_pressure_actual - prevPoint.steam_pressure_actual) / 5.0,
-        filler_flow_ramp: (currentPoint.filler_flow_actual - prevPoint.filler_flow_actual) / 5.0,
-        interaction_feature: computeInteractionFeature(visibleTimeseries),
-        current_bw: currentPoint.basis_weight_actual
-      })
-    },
-    enabled: !!currentPoint,
-  })
-
-  // 4.5 Live Stabilization Prediction
-  const { data: stabilizationData } = useQuery({
-    queryKey: ['stabilization', eventId, currentPoint?.timestamp, simulatedValue],
-    queryFn: async () => {
-      if (!currentPoint) return null;
-      const prevPoint = visibleTimeseries && visibleTimeseries.length > 5 ? visibleTimeseries[visibleTimeseries.length - 5] : currentPoint;
-      
-      let sf_ramp = (currentPoint.stock_flow_actual - prevPoint.stock_flow_actual) / 5.0;
-      let ms_ramp = (currentPoint.machine_speed_actual - prevPoint.machine_speed_actual) / 5.0;
-
-      if (simulatedValue !== null) {
-        if (simulatedValue.parameter === 'Stock Flow') {
-          sf_ramp = (simulatedValue.value - currentPoint.stock_flow_actual) / 15.0;
-        } else if (simulatedValue.parameter === 'Machine Speed') {
-          ms_ramp = (simulatedValue.value - currentPoint.machine_speed_actual) / 15.0;
-        }
-      }
-
-      return getStabilizationPrediction({
-        bw_deviation: currentPoint.basis_weight_actual - currentPoint.basis_weight_setpoint,
-        bw_slope: (currentPoint.basis_weight_actual - prevPoint.basis_weight_actual) / 5.0,
-        stock_flow_ramp: sf_ramp,
-        machine_speed_ramp: ms_ramp,
-        steam_pressure_slope: (currentPoint.steam_pressure_actual - prevPoint.steam_pressure_actual) / 5.0,
-        filler_flow_ramp: (currentPoint.filler_flow_actual - prevPoint.filler_flow_actual) / 5.0,
-        interaction_feature: computeInteractionFeature(visibleTimeseries),
-        current_bw: currentPoint.basis_weight_actual
-      })
-    },
-    enabled: !!currentPoint,
-  })
-
-  // 5. Root Causes
-  const { data: rootCauses } = useQuery({
-    queryKey: ['rootCauses', eventId],
-    queryFn: () => getRootCauses(eventId),
-    refetchInterval: 5000,
-  })
+  // Extract from snapshot
+  const riskData = snapshot?.risk;
+  const trajectoryData = snapshot?.trajectory;
+  const stabilizationData = snapshot?.stabilization;
+  const rootCauses = snapshot?.root_causes;
+  const currentFeatures = snapshot?.current_features;
 
 
 
@@ -363,7 +263,8 @@ export default function CommandCenter() {
   
   const generateRec = async () => {
     try {
-      const rec = await generateRecommendation({ event_id: eventId, timestamp: new Date().toISOString() })
+      if (!currentPoint) return;
+      const rec = await generateRecommendation({ event_id: eventId, timestamp: currentPoint.timestamp })
       setCurrentRec(rec)
       setSimulatedValue({ parameter: rec.parameter_name, value: rec.recommended_value })
     } catch (e) {

@@ -22,6 +22,10 @@ def accept_recommendation(id: str, db: Session = Depends(get_db)):
     if not rec:
         raise HTTPException(status_code=404, detail="Recommendation not found")
         
+    existing_feedback = db.query(OperatorFeedback).filter(OperatorFeedback.recommendation_id == id).first()
+    if existing_feedback:
+        raise HTTPException(status_code=409, detail="Feedback already processed")
+        
     rec.status = "accepted"
     feedback = OperatorFeedback(
         recommendation_id=id,
@@ -40,6 +44,10 @@ def reject_recommendation(id: str, reason: str = Body(..., embed=True), db: Sess
     if not rec:
         raise HTTPException(status_code=404, detail="Recommendation not found")
         
+    existing_feedback = db.query(OperatorFeedback).filter(OperatorFeedback.recommendation_id == id).first()
+    if existing_feedback:
+        raise HTTPException(status_code=409, detail="Feedback already processed")
+        
     rec.status = "rejected"
     feedback = OperatorFeedback(
         recommendation_id=id,
@@ -57,6 +65,10 @@ def modify_recommendation(id: str, value: float = Body(..., embed=True), db: Ses
     rec = db.query(Recommendation).filter(Recommendation.recommendation_id == id).first()
     if not rec:
         raise HTTPException(status_code=404, detail="Recommendation not found")
+        
+    existing_feedback = db.query(OperatorFeedback).filter(OperatorFeedback.recommendation_id == id).first()
+    if existing_feedback:
+        raise HTTPException(status_code=409, detail="Feedback already processed")
         
     rec.status = "modified"
     feedback = OperatorFeedback(

@@ -13,6 +13,18 @@ import type {
   DiscoveredRelationship,
 } from '../types';
 
+export interface SnapshotResponse {
+  event: GradeChangeEvent;
+  timeseries: TimeseriesPoint[];
+  current_features?: Record<string, number>;
+  risk?: RiskPrediction;
+  trajectory?: TrajectoryPrediction;
+  stabilization?: StabilizationPrediction;
+  root_causes: RootCause[];
+  recommendation?: Recommendation;
+  correlations: DiscoveredRelationship[];
+}
+
 // In dev, Vite proxy handles /api → localhost:8000
 // In prod, set VITE_API_URL to the Render backend URL
 const BASE_URL = import.meta.env.VITE_API_URL || '/api';
@@ -36,19 +48,11 @@ export const getGradeChange = (eventId: string) =>
 export const getTimeseries = (eventId: string) =>
   api.get<TimeseriesPoint[]>(`/grade-changes/${eventId}/timeseries`).then((r) => r.data);
 
-// ---- Predictions ----
-export const getRiskPrediction = (data: Record<string, number>) =>
-  api.post<RiskPrediction>('/predictions/risk', data).then((r) => r.data);
+// ---- Snapshot ----
+export const getSnapshot = (eventId: string, timestamp: string) =>
+  api.get<SnapshotResponse>(`/grade-changes/${eventId}/snapshot`, { params: { timestamp } }).then((r) => r.data);
 
-export const getTrajectoryPrediction = (data: Record<string, number>) =>
-  api.post<TrajectoryPrediction>('/predictions/trajectory', data).then((r) => r.data);
 
-export const getStabilizationPrediction = (data: Record<string, number>) =>
-  api.post<StabilizationPrediction>('/predictions/stabilization', data).then((r) => r.data);
-
-// ---- Root Causes ----
-export const getRootCauses = (eventId: string) =>
-  api.get<RootCause[]>(`/grade-changes/${eventId}/root-causes`).then((r) => r.data);
 
 // ---- Recommendations ----
 export const getRecommendations = (eventId: string) =>

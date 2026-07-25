@@ -43,17 +43,18 @@ class RootCauseService:
         else:
             self.importances = [1.0 / len(self.feature_names)] * len(self.feature_names)
 
-    def get_root_causes(self, event_id: str, db: Session) -> List[RootCauseSchema]:
+    def get_root_causes(self, event_id: str, db: Session, features: Dict = None) -> List[RootCauseSchema]:
         if not self.model or not self.importances:
             return []
 
-        # Get current event state
-        pts = db.query(TimeseriesPoint).filter(TimeseriesPoint.event_id == event_id).order_by(TimeseriesPoint.timestamp.desc()).limit(12).all()
-        if len(pts) < 12:
-            return []
-            
-        window = list(reversed(pts))
-        features = feature_service.extract_features(window)
+        if features is None:
+            # Get current event state (this leaks if not careful, so prefer passing features)
+            pts = db.query(TimeseriesPoint).filter(TimeseriesPoint.event_id == event_id).order_by(TimeseriesPoint.timestamp.desc()).limit(12).all()
+            if len(pts) < 12:
+                return []
+                
+            window = list(reversed(pts))
+            features = feature_service.extract_features(window)
         
         # Calculate dynamic contribution
         contributions = []

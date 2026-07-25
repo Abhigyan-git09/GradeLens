@@ -36,13 +36,21 @@ class RecommendationEngine:
         current_risk = risk_predictor_service.predict_risk(current_features)["probability"]
         current_stab = stabilization_service.estimate_stabilization(current_features)["estimated_seconds"]
         
+        # Check configurable low-risk threshold
+        LOW_RISK_THRESHOLD = getattr(settings, "LOW_RISK_THRESHOLD", 0.25)
+        MIN_IMPROVEMENT = getattr(settings, "MIN_RISK_IMPROVEMENT", 0.05)
+        
+        if current_risk < LOW_RISK_THRESHOLD:
+            # Low risk, no intervention required
+            return self._create_no_action_recommendation(event_id, db, current_risk, current_stab)
+        
         # 1. Candidate Generation
         target_parameters = [
             {"name": "stock_flow", "current": latest_pt.stock_flow_actual, "setpoint_attr": "stock_flow_setpoint"},
             {"name": "machine_speed", "current": latest_pt.machine_speed_actual, "setpoint_attr": "machine_speed_setpoint"}
         ]
         
-        offsets = [-0.10, -0.08, -0.06, -0.04, -0.02, 0.02, 0.04, 0.06, 0.08, 0.10]
+        offsets = [-0.10, -0.08, -0.06, -0.04, -0.02, 0.0, 0.02, 0.04, 0.06, 0.08, 0.10]
         candidates = []
         
         for param in target_parameters:
@@ -101,11 +109,15 @@ class RecommendationEngine:
             scored_candidates.append(cand)
             
         if not scored_candidates:
-            return None
+            return self._create_no_action_recommendation(event_id, db, current_risk, current_stab)
             
         # 4. Rank and pick best
         scored_candidates.sort(key=lambda x: x["score"])
         best = scored_candidates[0]
+        
+        # Must beat baseline by MIN_IMPROVEMENT
+        if best["risk_after"] > current_risk - MIN_IMPROVEMENT or best["offset_pct"] == 0.0:
+            return self._create_no_action_recommendation(event_id, db, current_risk, current_stab)
         
         # 5. Create Recommendation & Tags
         param_display_name = "Stock Flow" if best["parameter"] == "stock_flow" else "Machine Speed"
@@ -143,6 +155,28 @@ class RecommendationEngine:
         db.commit()
         db.refresh(rec)
         
+        return rec
+
+    def _create_no_action_recommendation(self, event_id, db, current_risk, current_stab):
+        rec = Recommendation(
+            recommendation_id=str(uuid.uuid4()),
+            event_id=event_id,
+            timestamp=datetime.utcnow(),
+            parameter_name="No intervention",
+            current_value=0.0,
+            recommended_value=0.0,
+            recommended_ramp_rate=0.0,
+            risk_before=current_risk,
+            risk_after=current_risk,
+            stabilization_before=current_stab,
+            stabilization_after=current_stab,
+            confidence=1.0,
+            rationale="No corrective action is currently recommended. Continue monitoring.",
+            status="pending"
+        )
+        db.add(rec)
+        db.commit()
+        db.refresh(rec)
         return rec
 
 recommendation_engine = RecommendationEngine()

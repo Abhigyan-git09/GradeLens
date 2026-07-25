@@ -1,10 +1,21 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List
+from datetime import datetime
 
 from app.database import get_db
-from app.models.domain import GradeChangeEvent, TimeseriesPoint
-from app.schemas.domain import GradeChangeEventSchema, TimeseriesPointSchema, RootCauseSchema, RecommendationSchema
+from app.models.domain import GradeChangeEvent, TimeseriesPoint, Recommendation
+from app.schemas.domain import (
+    GradeChangeEventSchema, 
+    TimeseriesPointSchema, 
+    RootCauseSchema, 
+    RecommendationSchema,
+    SnapshotResponseSchema
+)
+from ml.feature_service import feature_service
+from ml.risk_predictor import risk_predictor_service
+from ml.trajectory_forecast import trajectory_forecaster_service
+from ml.stabilization_service import stabilization_service
 
 router = APIRouter(prefix="/grade-changes", tags=["Grade Changes"])
 
@@ -31,5 +42,58 @@ def get_root_causes(event_id: str, db: Session = Depends(get_db)):
 @router.get("/{event_id}/recommendations", response_model=List[RecommendationSchema])
 def get_recommendations(event_id: str, db: Session = Depends(get_db)):
     # Fetch from DB
-    from app.models.domain import Recommendation
     return db.query(Recommendation).filter(Recommendation.event_id == event_id).all()
+
+@router.get("/{event_id}/snapshot", response_model=SnapshotResponseSchema)
+def get_snapshot(event_id: str, timestamp: datetime = Query(...), db: Session = Depends(get_db)):
+    """
+    Returns a unified snapshot of the event up to the given timestamp,
+    preventing any future-data leakage.
+    """
+    event = db.query(GradeChangeEvent).filter(GradeChangeEvent.event_id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+        
+    pts = db.query(TimeseriesPoint).filter(
+        TimeseriesPoint.event_id == event_id,
+        TimeseriesPoint.timestamp <= timestamp
+    ).order_by(TimeseriesPoint.timestamp.asc()).all()
+
+    snapshot = SnapshotResponseSchema(
+        event=GradeChangeEventSchema.model_validate(event),
+        timeseries=[TimeseriesPointSchema.model_validate(p) for p in pts],
+        root_causes=[],
+        correlations=[]
+    )
+
+    if len(pts) >= 12:
+        # Recompute features
+        features = feature_service.extract_features(pts[-12:])
+        snapshot.current_features = features
+        
+        # Risk
+        snapshot.risk = risk_predictor_service.predict_risk(features)
+        
+        # Trajectory
+        snapshot.trajectory = trajectory_forecaster_service.forecast(features)
+        
+        # Stabilization
+        snapshot.stabilization = stabilization_service.estimate_stabilization(features)
+        
+        # Root causes
+        from app.services.rootcause_service import rootcause_service
+        # Pass features directly so it doesn't need to refetch and leak future data
+        snapshot.root_causes = rootcause_service.get_root_causes(event_id, db, features=features)  
+        
+    # Recommendations: find the latest recommendation generated AT OR BEFORE this timestamp
+    # Note: recommendations might not have timestamps attached correctly in some versions, 
+    # but let's filter by timestamp if available.
+    recs = db.query(Recommendation).filter(
+        Recommendation.event_id == event_id,
+        Recommendation.timestamp <= timestamp
+    ).order_by(Recommendation.timestamp.desc()).all()
+    
+    if recs:
+        snapshot.recommendation = RecommendationSchema.model_validate(recs[0])
+        
+    return snapshot
