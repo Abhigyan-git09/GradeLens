@@ -14,8 +14,12 @@ def simulate_setpoints(setpoints: Dict):
 
 @router.get("/correlations", response_model=List[DiscoveredRelationshipSchema])
 def get_correlations(db: Session = Depends(get_db)):
-    # Stretch goal
+    from app.services.correlation_service import correlation_service
     from app.models.domain import DiscoveredRelationship
+    
+    # Run discovery on the Demo Event (Recoverable)
+    correlation_service.discover_relationships("EVT-003-RECOVERABLE", db)
+    
     return db.query(DiscoveredRelationship).all()
 
 @router.get("/audit/recommendations")

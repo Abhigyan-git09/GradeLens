@@ -25,8 +25,8 @@ def get_timeseries(event_id: str, db: Session = Depends(get_db)):
 
 @router.get("/{event_id}/root-causes", response_model=List[RootCauseSchema])
 def get_root_causes(event_id: str, db: Session = Depends(get_db)):
-    # To be implemented in Phase 6/7
-    return []
+    from app.services.rootcause_service import rootcause_service
+    return rootcause_service.get_root_causes(event_id, db)
 
 @router.get("/{event_id}/recommendations", response_model=List[RecommendationSchema])
 def get_recommendations(event_id: str, db: Session = Depends(get_db)):
