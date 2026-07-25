@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -30,8 +30,10 @@ import {
   generateRecommendation,
   acceptRecommendation,
   rejectRecommendation,
+  getCorrelations,
 } from '../api/client'
 import TrajectoryChart from '../components/TrajectoryChart'
+import InfluenceGraph from '../components/InfluenceGraph'
 
 /* =====================================================
    Animation Variants — staggered cascade reveals
@@ -201,17 +203,27 @@ export default function CommandCenter() {
 
   const currentPoint = timeseries && timeseries.length > 0 ? timeseries[timeseries.length - 1] : null
 
+  // Simulator State
+  const [simulatedValue, setSimulatedValue] = useState<number | null>(null)
+
   // 3. Live Risk Prediction
   const { data: riskData } = useQuery({
-    queryKey: ['risk', eventId, currentPoint?.timestamp],
+    queryKey: ['risk', eventId, currentPoint?.timestamp, simulatedValue],
     queryFn: async () => {
       if (!currentPoint) return null;
       // Synthesize feature vector from latest point and recent slope (mock slope for frontend)
       const prevPoint = timeseries && timeseries.length > 5 ? timeseries[timeseries.length - 5] : currentPoint;
+      
+      let ramp = (currentPoint.stock_flow_actual - prevPoint.stock_flow_actual) / 5.0;
+      if (simulatedValue !== null) {
+        // Calculate a simulated ramp rate towards the new target over 15 seconds
+        ramp = (simulatedValue - currentPoint.stock_flow_actual) / 15.0;
+      }
+
       return getRiskPrediction({
         bw_deviation: currentPoint.basis_weight_actual - currentPoint.basis_weight_setpoint,
         bw_slope: (currentPoint.basis_weight_actual - prevPoint.basis_weight_actual) / 5.0,
-        stock_flow_ramp: (currentPoint.stock_flow_actual - prevPoint.stock_flow_actual) / 5.0,
+        stock_flow_ramp: ramp,
         interaction_feature: 0.0, // Default for now
         current_bw: currentPoint.basis_weight_actual
       })
@@ -221,14 +233,20 @@ export default function CommandCenter() {
 
   // 4. Live Trajectory Prediction
   const { data: trajectoryData } = useQuery({
-    queryKey: ['trajectory', eventId, currentPoint?.timestamp],
+    queryKey: ['trajectory', eventId, currentPoint?.timestamp, simulatedValue],
     queryFn: async () => {
       if (!currentPoint) return null;
       const prevPoint = timeseries && timeseries.length > 5 ? timeseries[timeseries.length - 5] : currentPoint;
+      
+      let ramp = (currentPoint.stock_flow_actual - prevPoint.stock_flow_actual) / 5.0;
+      if (simulatedValue !== null) {
+        ramp = (simulatedValue - currentPoint.stock_flow_actual) / 15.0;
+      }
+
       return getTrajectoryPrediction({
         bw_deviation: currentPoint.basis_weight_actual - currentPoint.basis_weight_setpoint,
         bw_slope: (currentPoint.basis_weight_actual - prevPoint.basis_weight_actual) / 5.0,
-        stock_flow_ramp: (currentPoint.stock_flow_actual - prevPoint.stock_flow_actual) / 5.0,
+        stock_flow_ramp: ramp,
         current_bw: currentPoint.basis_weight_actual
       })
     },
@@ -263,6 +281,7 @@ export default function CommandCenter() {
     try {
       const rec = await generateRecommendation({ event_id: eventId, timestamp: new Date().toISOString() })
       setCurrentRec(rec)
+      setSimulatedValue(rec.recommended_value)
     } catch (e) {
       console.error(e)
     }
@@ -274,6 +293,7 @@ export default function CommandCenter() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['audit'] })
       setCurrentRec(null)
+      setSimulatedValue(null)
     }
   })
 
@@ -282,6 +302,7 @@ export default function CommandCenter() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['audit'] })
       setCurrentRec(null)
+      setSimulatedValue(null)
     }
   })
 
@@ -290,6 +311,12 @@ export default function CommandCenter() {
     queryKey: ['audit'],
     queryFn: () => getAuditLog(),
     refetchInterval: 5000,
+  })
+  
+  // 9. Correlations for Influence Graph
+  const { data: correlations } = useQuery({
+    queryKey: ['correlations'],
+    queryFn: () => getCorrelations(),
   })
 
   return (
@@ -514,10 +541,10 @@ export default function CommandCenter() {
               <div className="bg-panel-bg/60 rounded-xl p-4 mb-4 border border-panel-border/50">
                 <div className="flex items-center gap-2 mb-3">
                   <div className="w-8 h-8 rounded-lg bg-status-stable/10 flex items-center justify-center">
-                    {currentRec.recommended_value < currentRec.current_value ? <TrendingDown className="w-4 h-4 text-status-stable" /> : <TrendingUp className="w-4 h-4 text-status-stable" />}
+                    {simulatedValue !== null && simulatedValue < currentRec.current_value ? <TrendingDown className="w-4 h-4 text-status-stable" /> : <TrendingUp className="w-4 h-4 text-status-stable" />}
                   </div>
                   <div>
-                    <p className="text-sm font-semibold">{currentRec.recommended_value < currentRec.current_value ? 'Reduce' : 'Increase'} {currentRec.parameter_name} Setpoint</p>
+                    <p className="text-sm font-semibold">{simulatedValue !== null && simulatedValue < currentRec.current_value ? 'Reduce' : 'Increase'} {currentRec.parameter_name} Setpoint</p>
                     <p className="text-[0.6875rem] text-text-muted">{currentRec.rationale}</p>
                   </div>
                 </div>
@@ -527,14 +554,37 @@ export default function CommandCenter() {
                     <p className="text-[0.625rem] text-text-muted mb-1 uppercase tracking-wider">Current</p>
                     <p className="data-value text-base font-semibold">{currentRec.current_value}</p>
                   </div>
-                  <div className="bg-status-stable/5 rounded-lg p-3 text-center border border-status-stable/15">
+                  <div className="bg-status-stable/5 rounded-lg p-3 text-center border border-status-stable/15 relative">
                     <p className="text-[0.625rem] text-status-stable mb-1 uppercase tracking-wider font-medium">Recommended</p>
-                    <p className="data-value text-base font-bold text-status-stable">{currentRec.recommended_value}</p>
+                    <p className="data-value text-base font-bold text-status-stable">{simulatedValue}</p>
                   </div>
                   <div className="bg-panel-surface/50 rounded-lg p-3 text-center">
-                    <p className="text-[0.625rem] text-text-muted mb-1 uppercase tracking-wider">Ramp Rate</p>
-                    <p className="data-value text-base font-semibold">{currentRec.recommended_ramp_rate}</p>
+                    <p className="text-[0.625rem] text-text-muted mb-1 uppercase tracking-wider">Sim Ramp</p>
+                    <p className="data-value text-base font-semibold">
+                      {simulatedValue !== null && currentPoint ? ((simulatedValue - currentPoint.stock_flow_actual) / 15.0).toFixed(1) : currentRec.recommended_ramp_rate}
+                    </p>
                     <p className="text-[0.625rem] text-text-muted">/s</p>
+                  </div>
+                </div>
+                
+                {/* Simulator Slider */}
+                <div className="mb-5 px-1">
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="text-[0.6875rem] text-text-muted font-medium">Setpoint Simulator Override</span>
+                    <span className="text-[0.625rem] text-accent">Live Inference Active</span>
+                  </div>
+                  <input 
+                    type="range" 
+                    min={currentRec.current_value * 0.9} 
+                    max={currentRec.current_value * 1.1} 
+                    value={simulatedValue ?? currentRec.recommended_value}
+                    onChange={(e) => setSimulatedValue(Number(e.target.value))}
+                    className="w-full accent-accent h-1.5 bg-panel-surface rounded-lg appearance-none cursor-pointer"
+                  />
+                  <div className="flex justify-between text-[0.625rem] text-text-muted mt-1">
+                    <span>-10%</span>
+                    <span>Engine Default: {currentRec.recommended_value}</span>
+                    <span>+10%</span>
                   </div>
                 </div>
 
@@ -651,6 +701,21 @@ export default function CommandCenter() {
             </tbody>
           </table>
         </div>
+      </motion.div>
+      {/* ---- Row 5: Influence Graph (Stretch Goal) ---- */}
+      <motion.div variants={itemVariants} className="panel p-5">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider">
+              Discovered Relationships (Influence Graph)
+            </h3>
+            <p className="text-[0.6875rem] text-text-muted mt-1">
+              Visualizing Pearson/Spearman correlations across parameter time-lags
+            </p>
+          </div>
+          <span className="evidence-tag bg-accent/10 border-accent/20 text-accent">Physics Model</span>
+        </div>
+        <InfluenceGraph correlations={correlations || []} />
       </motion.div>
     </motion.div>
   )
