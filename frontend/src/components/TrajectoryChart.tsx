@@ -107,13 +107,15 @@ export default function TrajectoryChart({
             fontSize={10}
             tickMargin={10}
             minTickGap={30}
+            label={{ value: "Time", position: "insideBottomRight", offset: -5, fill: "#94a3b8", fontSize: 10 }}
           />
           <YAxis 
             domain={[minBw, maxBw]} 
             stroke="#64748b" 
             fontSize={10}
             tickFormatter={(val) => val.toFixed(1)}
-            width={40}
+            width={60}
+            label={{ value: "Basis Weight (g/m²)", angle: -90, position: "insideLeft", fill: "#94a3b8", fontSize: 10, style: { textAnchor: 'middle' } }}
           />
           
           <Tooltip 

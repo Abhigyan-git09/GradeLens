@@ -62,8 +62,8 @@ class CorrelationService:
         interaction_vals = []
         bw_future_vals = []
         
-        for i in range(10, len(pts) - 10):
-            window = pts[i-10:i]
+        for i in range(12, len(pts) - 10):
+            window = pts[i-12:i]
             features = feature_service.extract_features(window)
             interaction_vals.append(features["interaction_feature"])
             
