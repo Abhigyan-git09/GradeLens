@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 from secrets import compare_digest
@@ -13,6 +12,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.database import SessionLocal, engine, init_db
 from app.models.domain import GradeChangeEvent
+from ml.artifact_integrity import artifact_sha256
 from ml.feature_service import FEATURE_NAMES
 from ml.risk_predictor import risk_predictor_service
 from ml.stabilization_service import stabilization_service
@@ -84,7 +84,7 @@ def inspect_model_artifacts() -> dict[str, Any]:
                                 f"Manifest artifact is missing: {name}"
                             )
                             break
-                        actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+                        actual_hash = artifact_sha256(path)
                         if not compare_digest(actual_hash, str(expected_hash)):
                             manifest_error = (
                                 f"Artifact checksum validation failed: {name}"

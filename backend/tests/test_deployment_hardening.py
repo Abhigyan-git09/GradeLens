@@ -8,13 +8,14 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from app.config import settings
-from app.database import _engine_options
+from app.database import _engine_options, _normalize_database_url
 from app.runtime import (
     initialize_runtime,
     inspect_model_artifacts,
     required_artifact_names,
 )
 from app.security import RequestSafetyMiddleware, require_write_access
+from ml.artifact_integrity import artifact_sha256
 
 
 def test_database_options_are_dialect_safe():
@@ -29,12 +30,38 @@ def test_database_options_are_dialect_safe():
     assert postgres_options["pool_pre_ping"] is True
 
 
+def test_generic_postgres_url_selects_psycopg3():
+    url = _normalize_database_url(
+        "postgresql://gradelens:secret@example.test/gradelens"
+    )
+
+    assert url.drivername == "postgresql+psycopg"
+    assert url.host == "example.test"
+
+
+def test_explicit_database_driver_is_preserved():
+    url = _normalize_database_url(
+        "postgresql+psycopg://gradelens:secret@example.test/gradelens"
+    )
+
+    assert url.drivername == "postgresql+psycopg"
+
+
 def test_packaged_artifacts_have_valid_manifest():
     status = inspect_model_artifacts()
     assert status["ready"] is True
     assert status["missing"] == []
     assert status["manifest_error"] is None
     assert "artifact_manifest.json" in required_artifact_names()
+
+
+def test_json_artifact_hash_is_stable_across_line_endings(tmp_path):
+    lf_artifact = tmp_path / "metrics-lf.json"
+    crlf_artifact = tmp_path / "metrics-crlf.json"
+    lf_artifact.write_bytes(b'{\n  "metric": 0.91\n}\n')
+    crlf_artifact.write_bytes(b'{\r\n  "metric": 0.91\r\n}\r\n')
+
+    assert artifact_sha256(lf_artifact) == artifact_sha256(crlf_artifact)
 
 
 def test_write_access_requires_secret_when_configured():

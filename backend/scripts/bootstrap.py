@@ -4,7 +4,6 @@ import datetime
 import random
 import joblib
 import argparse
-import hashlib
 import json
 import numpy as np
 import lightgbm as lgb
@@ -36,6 +35,7 @@ from app.models.domain import (
     RecipeConstraint,
 )
 from ml.feature_service import feature_service, FEATURE_NAMES
+from ml.artifact_integrity import artifact_sha256
 from sqlalchemy import text
 from app.config import settings
 
@@ -54,8 +54,7 @@ def write_artifact_manifest():
     hashes = {}
     for name in names:
         path = os.path.join(ARTIFACTS_DIR, name)
-        with open(path, "rb") as artifact_file:
-            hashes[name] = hashlib.sha256(artifact_file.read()).hexdigest()
+        hashes[name] = artifact_sha256(path)
     manifest = {
         "schema_version": 1,
         "feature_count": len(FEATURE_NAMES),

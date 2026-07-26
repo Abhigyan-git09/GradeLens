@@ -1,0 +1,50 @@
+services:
+  - type: web
+    name: gradelens-api-abhigyan-git09
+    runtime: docker
+    plan: free
+    region: singapore
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health/ready
+    autoDeployTrigger: commit
+    envVars:
+      - fromGroup: gradelens-shared
+      - key: GRADELENS_ENVIRONMENT
+        value: production
+      - key: GRADELENS_DATABASE_URL
+        sync: false
+      - key: GRADELENS_SEED_DEMO_DATA_IF_EMPTY
+        value: "true"
+      - key: GRADELENS_TRAIN_MODELS_ON_STARTUP
+        value: "false"
+      - key: GRADELENS_STRICT_STARTUP
+        value: "true"
+      - key: GRADELENS_CORS_ORIGINS
+        value: "[]"
+      - key: OPENBLAS_NUM_THREADS
+        value: "1"
+      - key: OMP_NUM_THREADS
+        value: "1"
+
+  - type: web
+    name: gradelens-abhigyan-git09
+    runtime: docker
+    plan: free
+    region: singapore
+    rootDir: frontend
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    envVars:
+      - fromGroup: gradelens-shared
+      - key: BACKEND_UPSTREAM
+        value: https://gradelens-api-abhigyan-git09.onrender.com
+
+envVarGroups:
+  - name: gradelens-shared
+    envVars:
+      - key: GRADELENS_WRITE_API_KEY
+        generateValue: true

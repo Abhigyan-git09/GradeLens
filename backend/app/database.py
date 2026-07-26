@@ -3,15 +3,23 @@
 from pathlib import Path
 
 from sqlalchemy import create_engine, event, inspect, text
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import settings
 
 
+def _normalize_database_url(database_url: str) -> URL:
+    """Select Psycopg 3 when a provider returns a generic Postgres URL."""
+    url = make_url(database_url)
+    if url.drivername in {"postgres", "postgresql"}:
+        return url.set(drivername="postgresql+psycopg")
+    return url
+
+
 def _engine_options(database_url: str) -> dict:
     """Return dialect-safe engine arguments."""
-    url = make_url(database_url)
+    url = _normalize_database_url(database_url)
     options: dict = {
         "echo": False,
         "pool_pre_ping": True,
@@ -30,7 +38,7 @@ def _engine_options(database_url: str) -> dict:
 
 
 engine = create_engine(
-    settings.DATABASE_URL,
+    _normalize_database_url(settings.DATABASE_URL),
     **_engine_options(settings.DATABASE_URL),
 )
 
