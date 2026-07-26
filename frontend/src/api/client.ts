@@ -32,11 +32,13 @@ export interface SnapshotResponse {
 }
 
 // In dev, Vite proxy handles /api → localhost:8000
-// In prod, set VITE_API_URL to the Render backend URL
-const BASE_URL = import.meta.env.VITE_API_URL || '/api';
+// In production, the container proxy serves the same /api contract.
+const BASE_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/+$/, '');
 
 const api = axios.create({
   baseURL: BASE_URL,
+  timeout: 30_000,
+  withCredentials: false,
   headers: { 'Content-Type': 'application/json' },
 });
 

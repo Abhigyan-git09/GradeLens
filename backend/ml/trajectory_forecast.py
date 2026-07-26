@@ -1,10 +1,8 @@
-import os
 import joblib
 import numpy as np
 from typing import Dict, List, Any
+from app.config import settings
 from ml.feature_service import FEATURE_NAMES
-
-MODEL_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
 
 # Trajectory models use all 7 features
 TRAJ_FEATURE_NAMES = FEATURE_NAMES
@@ -21,8 +19,8 @@ class TrajectoryForecaster:
         self.is_trained = False
         trained_count = 0
         for h in self.horizons:
-            path = os.path.join(MODEL_DIR, f"trajectory_{h}s.joblib")
-            if os.path.exists(path):
+            path = settings.MODEL_DIR / f"trajectory_{h}s.joblib"
+            if path.exists():
                 try:
                     self.models[h] = joblib.load(path)
                     trained_count += 1

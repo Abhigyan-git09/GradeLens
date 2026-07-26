@@ -1,15 +1,13 @@
-import os
 import joblib
 import numpy as np
 import lightgbm as lgb
 from typing import Dict, Optional, Any
+from app.config import settings
 from ml.feature_service import FEATURE_NAMES
-
-MODEL_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
 
 class RiskPredictor:
     def __init__(self):
-        self.model_path = os.path.join(MODEL_DIR, "risk_model.joblib")
+        self.model_path = settings.MODEL_DIR / "risk_model.joblib"
         self.model = None
         self.is_trained = False
         self._load_model()
@@ -17,7 +15,7 @@ class RiskPredictor:
     def _load_model(self):
         self.model = None
         self.is_trained = False
-        if os.path.exists(self.model_path):
+        if self.model_path.exists():
             try:
                 self.model = joblib.load(self.model_path)
                 self.is_trained = True

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from typing import Dict, List
 
 import joblib
@@ -10,20 +9,15 @@ import numpy as np
 from dateutil.parser import isoparse
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models.domain import TimeseriesPoint
 from app.schemas.domain import RootCauseSchema
 from ml.feature_service import FEATURE_NAMES, feature_service
 
-MODEL_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-    "ml",
-    "artifacts",
-)
-
 
 class RootCauseService:
     def __init__(self):
-        self.model_path = os.path.join(MODEL_DIR, "risk_model.joblib")
+        self.model_path = settings.MODEL_DIR / "risk_model.joblib"
         self.feature_names = FEATURE_NAMES
         self.display_names = {
             "stock_flow_ramp": "Stock Flow Ramp",
@@ -42,7 +36,7 @@ class RootCauseService:
 
     def _load_model(self):
         self.model = None
-        if os.path.exists(self.model_path):
+        if self.model_path.exists():
             try:
                 self.model = joblib.load(self.model_path)
             except Exception:

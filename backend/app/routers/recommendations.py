@@ -12,6 +12,7 @@ from app.schemas.domain import (
 from app.models.domain import Recommendation, OperatorFeedback
 from app.services.recommendation_engine import recommendation_engine
 from app.services.counterfactual_service import counterfactual_service
+from app.security import require_write_access
 
 router = APIRouter(prefix="/recommendations", tags=["Recommendations"])
 
@@ -44,14 +45,22 @@ def simulate_recommendation(
         )
     return result
 
-@router.post("/generate", response_model=RecommendationSchema)
+@router.post(
+    "/generate",
+    response_model=RecommendationSchema,
+    dependencies=[Depends(require_write_access)],
+)
 def generate_recommendation(event_id: str = Body(..., embed=True), timestamp: str = Body(None, embed=True), db: Session = Depends(get_db)):
     rec = recommendation_engine.generate(event_id, db, timestamp)
     if not rec:
         raise HTTPException(status_code=400, detail="Could not generate recommendation or not enough data.")
     return rec
 
-@router.post("/{id}/accept", response_model=OperatorFeedbackSchema)
+@router.post(
+    "/{id}/accept",
+    response_model=OperatorFeedbackSchema,
+    dependencies=[Depends(require_write_access)],
+)
 def accept_recommendation(id: str, db: Session = Depends(get_db)):
     rec = db.query(Recommendation).filter(Recommendation.recommendation_id == id).first()
     if not rec:
@@ -73,7 +82,11 @@ def accept_recommendation(id: str, db: Session = Depends(get_db)):
     db.refresh(feedback)
     return feedback
 
-@router.post("/{id}/reject", response_model=OperatorFeedbackSchema)
+@router.post(
+    "/{id}/reject",
+    response_model=OperatorFeedbackSchema,
+    dependencies=[Depends(require_write_access)],
+)
 def reject_recommendation(id: str, reason: str = Body(..., embed=True), db: Session = Depends(get_db)):
     rec = db.query(Recommendation).filter(Recommendation.recommendation_id == id).first()
     if not rec:
@@ -95,7 +108,11 @@ def reject_recommendation(id: str, reason: str = Body(..., embed=True), db: Sess
     db.refresh(feedback)
     return feedback
 
-@router.post("/{id}/modify", response_model=OperatorFeedbackSchema)
+@router.post(
+    "/{id}/modify",
+    response_model=OperatorFeedbackSchema,
+    dependencies=[Depends(require_write_access)],
+)
 def modify_recommendation(id: str, value: float = Body(..., embed=True), db: Session = Depends(get_db)):
     rec = db.query(Recommendation).filter(Recommendation.recommendation_id == id).first()
     if not rec:

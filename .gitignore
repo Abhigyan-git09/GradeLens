@@ -20,6 +20,11 @@ env/
 
 # ML artifacts
 backend/ml/artifacts/*.joblib
+!backend/ml/artifacts/risk_model.joblib
+!backend/ml/artifacts/stabilization_knn.joblib
+!backend/ml/artifacts/trajectory_30s.joblib
+!backend/ml/artifacts/trajectory_60s.joblib
+!backend/ml/artifacts/trajectory_120s.joblib
 
 # IDE
 .vscode/

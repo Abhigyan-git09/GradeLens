@@ -1,56 +1,66 @@
-"""Health check endpoint."""
+"""Liveness, readiness, and operational health endpoints."""
 
-import json
+from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 
 from app.config import settings
+from app.runtime import (
+    database_is_ready,
+    inspect_model_artifacts,
+    model_services_ready,
+)
 
 router = APIRouter(tags=["health"])
 
 
-@router.get("/health")
-def health_check():
-    """
-    Health check with model mode indicator.
-    Returns 'trained' if model artifacts exist, 'degraded' otherwise.
-    """
-    model_dir = settings.MODEL_DIR
-    risk_model_exists = (model_dir / "risk_model.joblib").exists()
-    trajectory_models_exist = all(
-        (model_dir / f"trajectory_{h}s.joblib").exists()
-        for h in settings.PREDICTION_HORIZONS
+def _health_payload(request: Request) -> dict:
+    artifacts = inspect_model_artifacts()
+    database_ready = database_is_ready()
+    services_ready = model_services_ready()
+    startup_ready = bool(getattr(request.app.state, "ready", False))
+    ready = (
+        startup_ready
+        and artifacts["ready"]
+        and database_ready
+        and services_ready
     )
-    stabilization_model_exists = (
-        model_dir / "stabilization_knn.joblib"
-    ).exists()
-
-    if (
-        risk_model_exists
-        and trajectory_models_exist
-        and stabilization_model_exists
-    ):
-        model_mode = "trained"
-    elif (
-        risk_model_exists
-        or trajectory_models_exist
-        or stabilization_model_exists
-    ):
-        model_mode = "partial"
-    else:
-        model_mode = "degraded"
-
-    metrics = None
-    metrics_path = model_dir / "metrics.json"
-    if metrics_path.exists():
-        try:
-            metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            metrics = None
     return {
-        "status": "healthy",
-        "model_mode": model_mode,
-        "version": "0.1.0",
+        "status": "healthy" if ready else "degraded",
+        "ready": ready,
+        "model_mode": "trained" if services_ready else "degraded",
+        "database_ready": database_ready,
+        "version": settings.APP_VERSION,
         "project": "GradeLens",
-        "metrics": metrics,
+        "environment": settings.ENVIRONMENT,
+        "metrics": artifacts["metrics"],
     }
+
+
+@router.get("/health")
+def health_check(request: Request):
+    """Compatibility health endpoint used by the dashboard."""
+    return _health_payload(request)
+
+
+@router.get("/health/live")
+def liveness_check():
+    """Return process liveness without checking downstream dependencies."""
+    return {
+        "status": "alive",
+        "version": settings.APP_VERSION,
+        "project": "GradeLens",
+    }
+
+
+@router.get("/health/ready")
+def readiness_check(request: Request):
+    """Return 503 until database and packaged models are ready."""
+    payload = _health_payload(request)
+    if not payload["ready"]:
+        startup_error = getattr(request.app.state, "startup_error", None)
+        if startup_error and settings.ENVIRONMENT != "production":
+            payload["startup_error"] = startup_error
+        return JSONResponse(status_code=503, content=payload)
+    return payload

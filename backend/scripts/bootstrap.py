@@ -4,6 +4,7 @@ import datetime
 import random
 import joblib
 import argparse
+import hashlib
 import json
 import numpy as np
 import lightgbm as lgb
@@ -38,8 +39,35 @@ from ml.feature_service import feature_service, FEATURE_NAMES
 from sqlalchemy import text
 from app.config import settings
 
-ARTIFACTS_DIR = os.path.join(os.path.dirname(__file__), "..", "ml", "artifacts")
+ARTIFACTS_DIR = str(settings.MODEL_DIR)
 RANDOM_SEED = 42
+
+
+def write_artifact_manifest():
+    """Record artifact hashes so deployments can detect partial/corrupt copies."""
+    names = [
+        "risk_model.joblib",
+        "stabilization_knn.joblib",
+        *(f"trajectory_{horizon}s.joblib" for horizon in settings.PREDICTION_HORIZONS),
+        "metrics.json",
+    ]
+    hashes = {}
+    for name in names:
+        path = os.path.join(ARTIFACTS_DIR, name)
+        with open(path, "rb") as artifact_file:
+            hashes[name] = hashlib.sha256(artifact_file.read()).hexdigest()
+    manifest = {
+        "schema_version": 1,
+        "feature_count": len(FEATURE_NAMES),
+        "feature_names": FEATURE_NAMES,
+        "sha256": hashes,
+    }
+    with open(
+        os.path.join(ARTIFACTS_DIR, "artifact_manifest.json"),
+        "w",
+        encoding="utf-8",
+    ) as manifest_file:
+        json.dump(manifest, manifest_file, indent=2)
 
 def clear_existing_data(db):
     print("Clearing existing data for idempotent run...")
@@ -474,6 +502,7 @@ def train_models(db):
         encoding="utf-8",
     ) as metrics_file:
         json.dump(metrics, metrics_file, indent=2)
+    write_artifact_manifest()
     print(f"ML models trained and saved to {ARTIFACTS_DIR}")
 
 def main():
@@ -496,7 +525,8 @@ def main():
             for h in settings.PREDICTION_HORIZONS
         ) and
         os.path.exists(os.path.join(ARTIFACTS_DIR, "stabilization_knn.joblib")) and
-        os.path.exists(os.path.join(ARTIFACTS_DIR, "metrics.json"))
+        os.path.exists(os.path.join(ARTIFACTS_DIR, "metrics.json")) and
+        os.path.exists(os.path.join(ARTIFACTS_DIR, "artifact_manifest.json"))
     )
     
     if args.reset or args.retrain or not artifacts_exist:

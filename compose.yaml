@@ -1,0 +1,69 @@
+name: gradelens
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      GRADELENS_ENVIRONMENT: production
+      GRADELENS_DATABASE_URL: sqlite:////data/gradelens.db
+      GRADELENS_SEED_DEMO_DATA_IF_EMPTY: "true"
+      GRADELENS_TRAIN_MODELS_ON_STARTUP: "false"
+      GRADELENS_STRICT_STARTUP: "true"
+      GRADELENS_WRITE_API_KEY: "${GRADELENS_WRITE_API_KEY:?Set GRADELENS_WRITE_API_KEY in .env}"
+      GRADELENS_CORS_ORIGINS: "${GRADELENS_CORS_ORIGINS:-[]}"
+      GRADELENS_LLM_API_KEY: "${GRADELENS_LLM_API_KEY:-}"
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+    expose:
+      - "8000"
+    volumes:
+      - gradelens-data:/data
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: /api
+    restart: unless-stopped
+    environment:
+      BACKEND_UPSTREAM: http://backend:8000
+      GRADELENS_WRITE_API_KEY: "${GRADELENS_WRITE_API_KEY:?Set GRADELENS_WRITE_API_KEY in .env}"
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${GRADELENS_PORT:-8080}:8080"
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - --fail
+        - --silent
+        - --show-error
+        - --max-time
+        - "3"
+        - http://127.0.0.1:8080/healthz
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  gradelens-data:

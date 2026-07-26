@@ -1,22 +1,58 @@
-"""SQLAlchemy database setup — SQLite for hackathon simplicity."""
+"""SQLAlchemy database setup with persistent SQLite production support."""
 
-from sqlalchemy import create_engine, inspect, text
+from pathlib import Path
+
+from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import settings
 
 
+def _engine_options(database_url: str) -> dict:
+    """Return dialect-safe engine arguments."""
+    url = make_url(database_url)
+    options: dict = {
+        "echo": False,
+        "pool_pre_ping": True,
+    }
+    if url.get_backend_name() == "sqlite":
+        if url.database and url.database != ":memory:":
+            Path(url.database).expanduser().resolve().parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+        options["connect_args"] = {
+            "check_same_thread": False,
+            "timeout": 30,
+        }
+    return options
+
+
 engine = create_engine(
     settings.DATABASE_URL,
-    connect_args={"check_same_thread": False},  # SQLite-specific
-    echo=False,
+    **_engine_options(settings.DATABASE_URL),
 )
+
+
+if engine.dialect.name == "sqlite":
+
+    @event.listens_for(engine, "connect")
+    def _configure_sqlite(dbapi_connection, _connection_record):
+        """Enable integrity, concurrency, and bounded lock waits."""
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=30000")
+        cursor.close()
+
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 class Base(DeclarativeBase):
     """Declarative base for all ORM models."""
+
     pass
 
 
@@ -30,10 +66,8 @@ def get_db():
 
 
 def init_db():
-    """Create all tables. Called on startup."""
+    """Create tables and apply prototype-safe additive migrations."""
     Base.metadata.create_all(bind=engine)
-    # Lightweight SQLite migration for fields added after the prototype DB
-    # was first created. Production deployments should use Alembic.
     if engine.dialect.name == "sqlite":
         existing = {
             column["name"]

@@ -145,11 +145,14 @@ export interface DiscoveredRelationship {
 }
 
 // ---- Health Check ----
-export interface HealthStatus {
-  status: string;
-  model_mode: 'trained' | 'degraded' | 'partial';
-  version: string;
-  project: string;
+  export interface HealthStatus {
+    status: string;
+    ready?: boolean;
+    model_mode: 'trained' | 'degraded' | 'partial';
+    database_ready?: boolean;
+    version: string;
+    project: string;
+    environment?: 'development' | 'test' | 'production';
   metrics?: {
     dataset: Record<string, number>;
     risk: Record<string, number>;

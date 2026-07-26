@@ -1,14 +1,12 @@
-import os
 import joblib
 import numpy as np
 from typing import Dict, Any
+from app.config import settings
 from ml.feature_service import FEATURE_NAMES
-
-MODEL_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
 
 class StabilizationService:
     def __init__(self):
-        self.model_path = os.path.join(MODEL_DIR, "stabilization_knn.joblib")
+        self.model_path = settings.MODEL_DIR / "stabilization_knn.joblib"
         self.model = None
         self.neighbor_model = None
         self.neighbor_count = 0
@@ -20,7 +18,7 @@ class StabilizationService:
         self.neighbor_model = None
         self.neighbor_count = 0
         self.is_trained = False
-        if os.path.exists(self.model_path):
+        if self.model_path.exists():
             try:
                 artifact = joblib.load(self.model_path)
                 if isinstance(artifact, dict):

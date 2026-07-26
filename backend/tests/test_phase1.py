@@ -89,8 +89,15 @@ def test_no_action_baseline():
                 # we'll mock the internal methods instead
                 break
 
-    # To be fully deterministic, we'll just test that _create_no_action_recommendation returns the right format
-    rec = recommendation_engine._create_no_action_recommendation("EVT-TEST", db, 0.1, 0)
+    # Use a real event so the recommendation satisfies the database foreign
+    # key constraint enforced in production.
+    assert event is not None
+    rec = recommendation_engine._create_no_action_recommendation(
+        event.event_id,
+        db,
+        0.1,
+        0,
+    )
     assert rec.parameter_name == "No intervention"
     assert rec.rationale == "No corrective action is currently recommended. Continue monitoring."
     db.close()
