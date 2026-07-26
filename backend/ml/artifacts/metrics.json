@@ -1,0 +1,28 @@
+{
+  "dataset": {
+    "events_total": 103,
+    "training_pool_events": 100,
+    "curated_demo_events": 3,
+    "events_train": 70,
+    "events_validation": 15,
+    "events_test": 15,
+    "test_windows": 3060,
+    "positive_test_windows": 824,
+    "spec_deviation_pct": 2.5,
+    "feature_count": 16
+  },
+  "risk": {
+    "accuracy": 0.992483660130719,
+    "precision": 0.9854545454545455,
+    "recall": 0.9866504854368932,
+    "roc_auc": 0.9995351333865954,
+    "pr_auc": 0.9987898018401804,
+    "brier_score": 0.0063731898788608
+  },
+  "trajectory_mae_gsm": {
+    "30": 0.15850377097487178,
+    "60": 0.16600047075483793,
+    "120": 0.20194438200548492
+  },
+  "stabilization_mae_seconds": 147.93476609801237
+}

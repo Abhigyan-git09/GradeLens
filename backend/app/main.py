@@ -18,7 +18,12 @@ from app.routers import (
     predictions_router,
     recommendations_router,
     stretch_router,
+    intelligence_router,
 )
+from ml.feature_service import FEATURE_NAMES
+from ml.risk_predictor import risk_predictor_service
+from ml.trajectory_forecast import trajectory_forecaster_service
+from ml.stabilization_service import stabilization_service
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -26,9 +31,8 @@ async def lifespan(app: FastAPI):
     init_db()
     settings.MODEL_DIR.mkdir(parents=True, exist_ok=True)
     
-    import sys
+    import json
     import os
-    from pathlib import Path
     
     # Auto-seed if database is empty or models are missing
     from scripts.bootstrap import generate_synthetic_data, train_models, ARTIFACTS_DIR
@@ -38,17 +42,39 @@ async def lifespan(app: FastAPI):
     db = SessionLocal()
     try:
         events = db.query(GradeChangeEvent).count()
+        metrics_path = os.path.join(ARTIFACTS_DIR, "metrics.json")
         artifacts_exist = (
-            os.path.exists(os.path.join(ARTIFACTS_DIR, "risk_model.txt")) and
-            os.path.exists(os.path.join(ARTIFACTS_DIR, "trajectory_30s.joblib")) and
-            os.path.exists(os.path.join(ARTIFACTS_DIR, "stabilization_knn.joblib"))
+            os.path.exists(os.path.join(ARTIFACTS_DIR, "risk_model.joblib"))
+            and all(
+                os.path.exists(
+                    os.path.join(ARTIFACTS_DIR, f"trajectory_{h}s.joblib")
+                )
+                for h in settings.PREDICTION_HORIZONS
+            )
+            and os.path.exists(
+                os.path.join(ARTIFACTS_DIR, "stabilization_knn.joblib")
+            )
+            and os.path.exists(metrics_path)
         )
+        feature_schema_matches = False
+        if artifacts_exist:
+            with open(metrics_path, encoding="utf-8") as metrics_file:
+                metrics = json.load(metrics_file)
+            feature_schema_matches = (
+                metrics.get("dataset", {}).get("feature_count")
+                == len(FEATURE_NAMES)
+            )
         
-        if events == 0 or not artifacts_exist:
+        if events == 0 or not artifacts_exist or not feature_schema_matches:
             print("Auto-seeding database and training models on startup...")
-            generate_synthetic_data(db, force_reset=False)
+            generate_synthetic_data(db, force_reset=events > 0)
             train_models(db)
             print("Auto-seed complete.")
+        risk_predictor_service.reload_model()
+        trajectory_forecaster_service.reload_models()
+        stabilization_service.reload_model()
+        from app.services.rootcause_service import rootcause_service
+        rootcause_service.reload_model()
     except Exception as e:
         print(f"Error during auto-seed: {e}")
     finally:
@@ -78,6 +104,7 @@ app.include_router(grade_changes_router)
 app.include_router(predictions_router)
 app.include_router(recommendations_router)
 app.include_router(stretch_router)
+app.include_router(intelligence_router)
 
 # Stub routers will be added as we build each phase:
 # app.include_router(grade_changes.router)

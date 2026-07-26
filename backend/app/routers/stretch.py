@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from typing import List, Dict
+from datetime import datetime
 
 from app.database import get_db
 from app.schemas.domain import DiscoveredRelationshipSchema
@@ -10,13 +11,17 @@ router = APIRouter(tags=["Stretch & Audit"])
 
 
 @router.get("/correlations", response_model=List[DiscoveredRelationshipSchema])
-def get_correlations(event_id: str, db: Session = Depends(get_db)):
+def get_correlations(
+    event_id: str,
+    timestamp: datetime | None = None,
+    db: Session = Depends(get_db),
+):
     from app.services.correlation_service import correlation_service
     from app.models.domain import DiscoveredRelationship
     
-    correlation_service.discover_relationships(event_id, db)
-    
-    return db.query(DiscoveredRelationship).filter(DiscoveredRelationship.event_id == event_id).all()
+    return correlation_service.discover_relationships(
+        event_id, db, timestamp=timestamp
+    )
 
 @router.get("/audit/recommendations")
 def get_audit_log(db: Session = Depends(get_db)):

@@ -15,6 +15,8 @@ class RiskPredictor:
         self._load_model()
 
     def _load_model(self):
+        self.model = None
+        self.is_trained = False
         if os.path.exists(self.model_path):
             try:
                 self.model = joblib.load(self.model_path)
@@ -22,18 +24,25 @@ class RiskPredictor:
             except Exception:
                 self.is_trained = False
 
+    def reload_model(self):
+        """Reload a model created during application startup."""
+        self._load_model()
+
     def predict_risk(self, features: Dict[str, float]) -> dict:
         """Predict probability of off-spec within next 120s."""
         X = np.array([[features.get(f, 0.0) for f in FEATURE_NAMES]])
 
         if not self.is_trained:
             # Fallback degraded mode
-            prob = min(0.99, max(0.01, abs(features.get("bw_deviation", 0)) / 2.5))
+            prob = min(
+                0.99,
+                max(0.01, abs(features.get("bw_deviation_pct", 0)) / 2.5),
+            )
             direction = "upper" if features.get("bw_deviation", 0) > 0 else "lower"
             return {
                 "probability": round(prob, 3),
                 "direction": direction,
-                "time_to_violation_seconds": round(120.0 * (1.0 - prob), 1) if prob > 0.5 else None,
+                "time_to_violation_seconds": self._time_to_limit(features),
                 "risk_level": "critical" if prob > 0.75 else "high" if prob > 0.5 else "moderate" if prob > 0.25 else "low",
                 "model_mode": "degraded"
             }
@@ -50,7 +59,7 @@ class RiskPredictor:
         elif prob > 0.50: risk_level = "high"
         elif prob > 0.25: risk_level = "moderate"
 
-        time_to_violation = round(max(30.0, 300.0 * (1.0 - prob)), 1) if prob > 0.5 else None
+        time_to_violation = self._time_to_limit(features) if prob > 0.5 else None
 
         return {
             "probability": round(prob, 3),
@@ -59,5 +68,25 @@ class RiskPredictor:
             "risk_level": risk_level,
             "model_mode": "trained"
         }
+
+    @staticmethod
+    def _time_to_limit(features: Dict[str, float]) -> Optional[float]:
+        """Physics-based linear estimate, used only when the slope approaches a limit."""
+        setpoint = abs(features.get("current_setpoint", 0.0))
+        if setpoint <= 0:
+            return None
+        deviation = features.get("bw_deviation", 0.0)
+        relative_slope = (
+            features.get("bw_slope", 0.0)
+            - features.get("setpoint_slope", 0.0)
+        )
+        limit = setpoint * 0.025
+        if relative_slope > 1e-6:
+            seconds = (limit - deviation) / relative_slope
+        elif relative_slope < -1e-6:
+            seconds = (-limit - deviation) / relative_slope
+        else:
+            return None
+        return round(max(0.0, seconds), 1) if 0 <= seconds <= 300 else None
 
 risk_predictor_service = RiskPredictor()

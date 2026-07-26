@@ -20,7 +20,6 @@ class Settings(BaseSettings):
         "http://localhost:5173",
         "http://localhost:3000",
         "http://127.0.0.1:5173",
-        "*"
     ]
 
     # Model settings
@@ -32,6 +31,13 @@ class Settings(BaseSettings):
     REC_WEIGHT_RISK: float = 0.5
     REC_WEIGHT_STABILIZATION: float = 0.3
     REC_WEIGHT_CHANGE: float = 0.2
+
+    # Optional natural-language explanation provider. The deterministic,
+    # evidence-grounded explainer remains available when no key is configured.
+    LLM_API_KEY: str = ""
+    LLM_MODEL: str = "gpt-5.6-luna"
+    LLM_BASE_URL: str = "https://api.openai.com/v1"
+    LLM_TIMEOUT_SECONDS: float = 8.0
 
     model_config = {"env_prefix": "GRADELENS_"}
 

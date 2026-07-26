@@ -1,208 +1,203 @@
-import uuid
-from typing import List, Dict, Optional
-from datetime import datetime
+"""Constraint-aware recommendation search backed by counterfactual simulation."""
 
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime
+from typing import Optional
+
+from dateutil.parser import isoparse
 from sqlalchemy.orm import Session
-from app.models.domain import (
-    GradeChangeEvent, TimeseriesPoint, RecipeConstraint,
-    Recommendation, EvidenceTag
-)
+
 from app.config import settings
+from app.models.domain import (
+    EvidenceTag,
+    GradeChangeEvent,
+    Recommendation,
+    TimeseriesPoint,
+)
+from app.services.counterfactual_service import counterfactual_service
+from ml.feature_service import feature_service
 from ml.risk_predictor import risk_predictor_service
 from ml.stabilization_service import stabilization_service
-from ml.feature_service import feature_service
-from ml.trajectory_forecast import trajectory_forecaster_service
+
 
 class RecommendationEngine:
-    def __init__(self):
-        self.w1 = settings.REC_WEIGHT_RISK
-        self.w2 = settings.REC_WEIGHT_STABILIZATION
-        self.w3 = settings.REC_WEIGHT_CHANGE
-
-    def generate(self, event_id: str, db: Session, timestamp: str = None) -> Optional[Recommendation]:
-        event = db.query(GradeChangeEvent).filter(GradeChangeEvent.event_id == event_id).first()
+    def generate(
+        self,
+        event_id: str,
+        db: Session,
+        timestamp: str | None = None,
+    ) -> Optional[Recommendation]:
+        event = (
+            db.query(GradeChangeEvent)
+            .filter(GradeChangeEvent.event_id == event_id)
+            .first()
+        )
         if not event:
             return None
-            
-        query = db.query(TimeseriesPoint).filter(TimeseriesPoint.event_id == event_id)
-        if timestamp:
-            from dateutil.parser import isoparse
-            try:
-                dt = isoparse(timestamp)
-                query = query.filter(TimeseriesPoint.timestamp <= dt.replace(tzinfo=None))
-            except Exception:
-                pass
-        
-        pts = query.order_by(TimeseriesPoint.timestamp.desc()).limit(12).all()
-        if len(pts) < 12:
-            return None
-            
-        # Reverse to chronological for feature extraction
-        window = list(reversed(pts))
-        current_features = feature_service.extract_features(window)
-        latest_pt = window[-1]
-        
-        # Current baseline
-        current_risk = risk_predictor_service.predict_risk(current_features)["probability"]
-        current_stab = stabilization_service.estimate_stabilization(current_features)["estimated_seconds"]
-        
-        # Check configurable low-risk threshold
-        LOW_RISK_THRESHOLD = getattr(settings, "RISK_THRESHOLD", 0.6)
-        MIN_IMPROVEMENT = getattr(settings, "MIN_RISK_IMPROVEMENT", 0.05)
-        
-        if current_risk < LOW_RISK_THRESHOLD:
-            # Low risk, no intervention required
-            return self._create_no_action_recommendation(event_id, db, current_risk, current_stab)
-        
-        # 1. Candidate Generation
-        target_parameters = [
-            {"name": "stock_flow", "current": latest_pt.stock_flow_actual, "setpoint_attr": "stock_flow_setpoint"},
-            {"name": "machine_speed", "current": latest_pt.machine_speed_actual, "setpoint_attr": "machine_speed_setpoint"}
-        ]
-        
-        offsets = [-0.10, -0.08, -0.06, -0.04, -0.02, 0.0, 0.02, 0.04, 0.06, 0.08, 0.10]
-        candidates = []
-        
-        for param in target_parameters:
-            for offset in offsets:
-                cand_val = param["current"] * (1 + offset)
-                candidates.append({
-                    "parameter": param["name"],
-                    "value": cand_val,
-                    "offset_pct": offset
-                })
-                
-        # 2. Constraint Filter
-        constraints = db.query(RecipeConstraint).filter(RecipeConstraint.grade_id == event.target_grade).all()
-        const_dict = {c.parameter: c for c in constraints}
-        
-        valid_candidates = []
-        for cand in candidates:
-            p_name = cand["parameter"]
-            val = cand["value"]
-            if p_name in const_dict:
-                c = const_dict[p_name]
-                if val < c.min_val or val > c.max_val:
-                    continue
-                # Check ramp rate constraint
-                if c.max_ramp_rate:
-                    delta_pct = abs(cand["offset_pct"])
-                    if delta_pct > c.max_ramp_rate:
-                        continue
-                valid_candidates.append(cand)
-            else:
-                # Fail closed if no constraint found
-                continue
-            
-        if not valid_candidates:
-            return None
 
-        # 3. Re-score
-        scored_candidates = []
-        for cand in valid_candidates:
-            # Simulate features after recommendation
-            sim_features = current_features.copy()
-            if cand["parameter"] == "stock_flow":
-                sim_features["stock_flow_ramp"] = (cand["value"] - latest_pt.stock_flow_actual) / 15.0
-            elif cand["parameter"] == "machine_speed":
-                sim_features["machine_speed_ramp"] = (cand["value"] - latest_pt.machine_speed_actual) / 15.0
-                
-            risk_res = risk_predictor_service.predict_risk(sim_features)
-            stab_res = stabilization_service.estimate_stabilization(sim_features)
-            
-            risk_after = risk_res["probability"]
-            stab_after = stab_res["estimated_seconds"]
-            
-            # Objective: lower is better
-            score = (self.w1 * risk_after) + (self.w2 * stab_after / 600.0) + (self.w3 * abs(cand["offset_pct"]))
-            
-            cand["risk_after"] = risk_after
-            cand["stab_after"] = stab_after
-            cand["score"] = score
-            scored_candidates.append(cand)
-            
-        if not scored_candidates:
-            return self._create_no_action_recommendation(event_id, db, current_risk, current_stab)
-            
-        # 4. Rank and pick best
-        scored_candidates.sort(key=lambda x: x["score"])
-        best = scored_candidates[0]
-        
-        # Must beat baseline by MIN_IMPROVEMENT
-        if best["risk_after"] > current_risk - MIN_IMPROVEMENT or best["offset_pct"] == 0.0:
-            return self._create_no_action_recommendation(event_id, db, current_risk, current_stab)
-        
-        # 5. Create Recommendation & Tags
-        param_display_name = "Stock Flow" if best["parameter"] == "stock_flow" else "Machine Speed"
-        direction_text = "Increase" if best["offset_pct"] > 0 else "Decrease"
-        
+        query = db.query(TimeseriesPoint).filter(
+            TimeseriesPoint.event_id == event_id
+        )
+        decision_time = datetime.now(UTC).replace(tzinfo=None)
+        if timestamp:
+            try:
+                decision_time = isoparse(timestamp).replace(tzinfo=None)
+                query = query.filter(TimeseriesPoint.timestamp <= decision_time)
+            except (TypeError, ValueError):
+                return None
+        points = (
+            query.order_by(TimeseriesPoint.timestamp.desc()).limit(12).all()
+        )
+        if len(points) < 12:
+            return None
+        window = list(reversed(points))
+        latest = window[-1]
+        features = feature_service.extract_features(window)
+        current_risk = risk_predictor_service.predict_risk(features)[
+            "probability"
+        ]
+        current_stabilization = stabilization_service.estimate_stabilization(
+            features
+        )["estimated_seconds"]
+
+        if current_risk < settings.RISK_THRESHOLD:
+            return self._create_no_action_recommendation(
+                event_id,
+                db,
+                current_risk,
+                current_stabilization,
+                decision_time,
+                "Current forecast remains within the operating envelope.",
+            )
+
+        scored = []
+        for parameter, value in counterfactual_service.candidate_values(
+            event, latest, db
+        ):
+            simulation = counterfactual_service.simulate(
+                event_id, decision_time, parameter, value, db
+            )
+            if not simulation or not simulation["feasible"]:
+                continue
+            change_fraction = abs(
+                simulation["proposed_value"] - simulation["current_value"]
+            ) / max(abs(simulation["current_value"]), 1e-6)
+            score = (
+                settings.REC_WEIGHT_RISK * simulation["risk_after"]
+                + settings.REC_WEIGHT_STABILIZATION
+                * simulation["stabilization_after"]
+                / 600.0
+                + settings.REC_WEIGHT_CHANGE * change_fraction
+            )
+            benefit = (
+                simulation["risk_before"] - simulation["risk_after"]
+                + simulation["avoided_off_spec_seconds"] / 120.0
+            )
+            scored.append((score, -benefit, simulation))
+
+        if not scored:
+            return self._create_no_action_recommendation(
+                event_id,
+                db,
+                current_risk,
+                current_stabilization,
+                decision_time,
+                "No candidate satisfies the active recipe and actuator limits.",
+            )
+
+        scored.sort(key=lambda item: (item[0], item[1]))
+        best = scored[0][2]
+        risk_improvement = best["risk_before"] - best["risk_after"]
+        stabilization_improvement = (
+            best["stabilization_before"] - best["stabilization_after"]
+        )
+        if risk_improvement < 0.03 and stabilization_improvement < 20:
+            return self._create_no_action_recommendation(
+                event_id,
+                db,
+                current_risk,
+                current_stabilization,
+                decision_time,
+                "Constrained candidates do not provide a material improvement.",
+            )
+
+        delta = best["proposed_value"] - best["current_value"]
+        direction = "Increase" if delta > 0 else "Decrease"
         rec = Recommendation(
             recommendation_id=str(uuid.uuid4()),
             event_id=event_id,
-            timestamp=datetime.utcnow(),
-            parameter_name=param_display_name,
-            current_value=best["value"] / (1 + best["offset_pct"]),
-            recommended_value=best["value"],
-            recommended_ramp_rate= (best["value"] - best["value"]/(1+best["offset_pct"])) / 10.0,
-            risk_before=current_risk,
+            timestamp=decision_time,
+            parameter_name=best["parameter_name"],
+            current_value=best["current_value"],
+            recommended_value=best["proposed_value"],
+            recommended_ramp_rate=delta
+            / counterfactual_service.RAMP_SECONDS,
+            risk_before=best["risk_before"],
             risk_after=best["risk_after"],
-            stabilization_before=current_stab,
-            stabilization_after=best["stab_after"],
-            confidence=0.85,
-            rationale=f"{direction_text} {param_display_name} by {abs(best['offset_pct'])*100:.1f}% to mitigate {current_risk*100:.0f}% off-spec risk.",
-            status="pending"
+            stabilization_before=best["stabilization_before"],
+            stabilization_after=best["stabilization_after"],
+            confidence=best["confidence"],
+            rationale=(
+                f"{direction} {best['parameter_name']} to "
+                f"{best['proposed_value']:.2f}; projected off-spec exposure "
+                f"falls by {best['avoided_off_spec_seconds']:.0f}s while "
+                "remaining inside recipe and ramp constraints."
+            ),
+            status="pending",
         )
         db.add(rec)
-        db.commit()
-        
-        # 6 Evidence Tags
-        tags = []
-        tags.append(EvidenceTag(recommendation_id=rec.recommendation_id, tag="Risk Model", source="LightGBM Classifier", detail=f"Projects a {current_risk*100:.0f}% chance of exceeding spec limits within 120s without intervention."))
-        
-        # Trajectory forecast
-        traj = trajectory_forecaster_service.forecast(current_features)
-        drift_direction = "above" if traj.get("60s_forecast", 0.0) > 0 else "below"
-        tags.append(EvidenceTag(recommendation_id=rec.recommendation_id, tag="Trajectory Forecast", source="LightGBM Regressor", detail=f"Forecast shows basis weight drifting {drift_direction} setpoint over the next 60s."))
-        
-        tags.append(EvidenceTag(recommendation_id=rec.recommendation_id, tag="Recipe Constraint", source="System Bounds", detail=f"Recommended value {best['value']:.1f} is well within the {event.target_grade} recipe limits."))
-        tags.append(EvidenceTag(recommendation_id=rec.recommendation_id, tag="Historical Success", source="k-NN Estimator", detail=f"Similar transitions achieved stabilization in {best['stab_after']:.0f}s using this parameter profile."))
-        
-        # Process correlation (interaction)
-        interaction = current_features.get("interaction_feature", 0.0)
-        if abs(interaction) > 0.3:
-            tags.append(EvidenceTag(recommendation_id=rec.recommendation_id, tag="Process Correlation", source="Interaction Engine", detail="Identified compound interaction between filler flow and steam pressure driving current deviation."))
-            
-        tags.append(EvidenceTag(recommendation_id=rec.recommendation_id, tag="Rule-Based Safety Check", source="Actuator Limits", detail="Ramp rate complies with physical machine tolerances."))
-        
-        # Calculate dynamic confidence based on risk improvement and base risk
-        improvement = current_risk - best["risk_after"]
-        rec.confidence = min(0.99, max(0.5, 0.7 + improvement))
-        db.add_all(tags)
+        db.flush()
+        db.add_all(
+            [
+                EvidenceTag(recommendation_id=rec.recommendation_id, **tag)
+                for tag in best["evidence_tags"]
+            ]
+        )
         db.commit()
         db.refresh(rec)
-        
         return rec
 
-    def _create_no_action_recommendation(self, event_id, db, current_risk, current_stab):
+    @staticmethod
+    def _create_no_action_recommendation(
+        event_id,
+        db,
+        current_risk,
+        current_stabilization,
+        timestamp=None,
+        reason="No corrective action is currently recommended.",
+    ):
         rec = Recommendation(
             recommendation_id=str(uuid.uuid4()),
             event_id=event_id,
-            timestamp=datetime.utcnow(),
+            timestamp=timestamp
+            or datetime.now(UTC).replace(tzinfo=None),
             parameter_name="No intervention",
             current_value=0.0,
             recommended_value=0.0,
             recommended_ramp_rate=0.0,
             risk_before=current_risk,
             risk_after=current_risk,
-            stabilization_before=current_stab,
-            stabilization_after=current_stab,
-            confidence=1.0,
-            rationale="No corrective action is currently recommended. Continue monitoring.",
-            status="pending"
+            stabilization_before=current_stabilization,
+            stabilization_after=current_stabilization,
+            confidence=0.95,
+            rationale=f"{reason} Continue monitoring.",
+            status="pending",
         )
         db.add(rec)
+        db.flush()
+        db.add(
+            EvidenceTag(
+                recommendation_id=rec.recommendation_id,
+                tag="Safe Envelope",
+                source="Risk forecast and active recipe constraints",
+                detail=reason,
+            )
+        )
         db.commit()
         db.refresh(rec)
         return rec
+
 
 recommendation_engine = RecommendationEngine()

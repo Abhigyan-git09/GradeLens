@@ -17,6 +17,8 @@ class TrajectoryForecaster:
         self._load_models()
 
     def _load_models(self):
+        self.models = {}
+        self.is_trained = False
         trained_count = 0
         for h in self.horizons:
             path = os.path.join(MODEL_DIR, f"trajectory_{h}s.joblib")
@@ -29,10 +31,15 @@ class TrajectoryForecaster:
         if trained_count == len(self.horizons):
             self.is_trained = True
 
+    def reload_models(self):
+        self._load_models()
+
     def forecast(self, features: Dict[str, float]) -> dict:
         """Forecast future basis weight at discrete horizons."""
         results = []
         current_bw = features.get("current_bw", 64.0)
+        current_setpoint = features.get("current_setpoint", current_bw)
+        setpoint_slope = features.get("setpoint_slope", 0.0)
 
         X = np.array([[features.get(f, 0.0) for f in TRAJ_FEATURE_NAMES]])
 
@@ -45,11 +52,13 @@ class TrajectoryForecaster:
                 delta = delta * (0.8 if h > 60 else 1.0)
 
             pred_bw = current_bw + delta
-            uncertainty = 0.2 + (h / 100.0) * 0.4
+            pred_setpoint = current_setpoint + setpoint_slope * h
+            uncertainty = 0.25 + (h / 120.0) * 0.55
 
             results.append({
                 "seconds": h,
                 "predicted_bw": round(pred_bw, 2),
+                "predicted_setpoint": round(pred_setpoint, 2),
                 "lower_bound": round(pred_bw - uncertainty, 2),
                 "upper_bound": round(pred_bw + uncertainty, 2)
             })

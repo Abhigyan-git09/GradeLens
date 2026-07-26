@@ -10,7 +10,10 @@ from app.schemas.domain import (
     TimeseriesPointSchema, 
     RootCauseSchema, 
     RecommendationSchema,
-    SnapshotResponseSchema
+    SnapshotResponseSchema,
+    RiskPredictionSchema,
+    TrajectoryPredictionSchema,
+    StabilizationPredictionSchema,
 )
 from ml.feature_service import feature_service
 from ml.risk_predictor import risk_predictor_service
@@ -72,18 +75,51 @@ def get_snapshot(event_id: str, timestamp: datetime = Query(...), db: Session = 
         snapshot.current_features = features
         
         # Risk
-        snapshot.risk = risk_predictor_service.predict_risk(features)
+        snapshot.risk = RiskPredictionSchema(
+            **risk_predictor_service.predict_risk(features)
+        )
         
         # Trajectory
-        snapshot.trajectory = trajectory_forecaster_service.forecast(features)
+        snapshot.trajectory = TrajectoryPredictionSchema(
+            **trajectory_forecaster_service.forecast(features)
+        )
+        current_deviation_pct = abs(
+            features.get("bw_deviation_pct", 0.0)
+        )
+        if snapshot.risk and current_deviation_pct >= 2.5:
+            snapshot.risk.time_to_violation_seconds = 0.0
+        elif snapshot.risk and snapshot.risk.probability >= 0.5:
+            crossing = next(
+                (
+                    horizon.seconds
+                    for horizon in snapshot.trajectory.horizons
+                    if horizon.predicted_setpoint
+                    and abs(
+                        horizon.predicted_bw
+                        - horizon.predicted_setpoint
+                    )
+                    / horizon.predicted_setpoint
+                    * 100.0
+                    >= 2.5
+                ),
+                None,
+            )
+            snapshot.risk.time_to_violation_seconds = crossing
         
         # Stabilization
-        snapshot.stabilization = stabilization_service.estimate_stabilization(features)
+        snapshot.stabilization = StabilizationPredictionSchema(
+            **stabilization_service.estimate_stabilization(features)
+        )
         
         # Root causes
         from app.services.rootcause_service import rootcause_service
         # Pass features directly so it doesn't need to refetch and leak future data
         snapshot.root_causes = rootcause_service.get_root_causes(event_id, db, features=features)  
+        if len(pts) >= 30:
+            from app.services.correlation_service import correlation_service
+            snapshot.correlations = correlation_service.discover_relationships(
+                event_id, db, timestamp=timestamp
+            )
         
     # Recommendations: find the latest recommendation generated AT OR BEFORE this timestamp
     # Note: recommendations might not have timestamps attached correctly in some versions, 

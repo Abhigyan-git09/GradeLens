@@ -35,6 +35,8 @@ export interface TimeseriesPoint {
   moisture_setpoint: number;
   ash_actual: number;
   ash_setpoint: number;
+  caliper_actual: number;
+  caliper_setpoint: number;
   active_alarm_count: number;
   scanner_quality_score: number;
 }
@@ -44,7 +46,7 @@ export interface RiskPrediction {
   probability: number;
   direction: 'upper' | 'lower' | 'none';
   time_to_violation_seconds: number | null;
-  model_mode: 'trained' | 'degraded' | 'demo';
+  model_mode: 'trained' | 'degraded' | 'demo' | 'hybrid';
   risk_level: 'low' | 'moderate' | 'high' | 'critical';
 }
 
@@ -53,10 +55,11 @@ export interface TrajectoryPrediction {
   horizons: {
     seconds: number;
     predicted_bw: number;
+    predicted_setpoint: number;
     lower_bound: number;
     upper_bound: number;
   }[];
-  model_mode: 'trained' | 'degraded' | 'demo';
+  model_mode: 'trained' | 'degraded' | 'demo' | 'hybrid';
 }
 
 // ---- Stabilization Prediction ----
@@ -94,6 +97,25 @@ export interface Recommendation {
   status: 'pending' | 'accepted' | 'rejected' | 'modified';
 }
 
+export interface SimulationResult {
+  parameter_name: string;
+  current_value: number;
+  proposed_value: number;
+  feasible: boolean;
+  constraint_message: string;
+  risk_before: number;
+  risk_after: number;
+  stabilization_before: number;
+  stabilization_after: number;
+  off_spec_seconds_before: number;
+  off_spec_seconds_after: number;
+  avoided_off_spec_seconds: number;
+  confidence: number;
+  baseline_trajectory: TrajectoryPrediction;
+  counterfactual_trajectory: TrajectoryPrediction;
+  evidence_tags: EvidenceTag[];
+}
+
 // ---- Evidence Tag ----
 export interface EvidenceTag {
   tag: string;
@@ -128,6 +150,12 @@ export interface HealthStatus {
   model_mode: 'trained' | 'degraded' | 'partial';
   version: string;
   project: string;
+  metrics?: {
+    dataset: Record<string, number>;
+    risk: Record<string, number>;
+    trajectory_mae_gsm: Record<string, number>;
+    stabilization_mae_seconds: number;
+  } | null;
 }
 
 // ---- Audit Entry ----
@@ -143,4 +171,152 @@ export interface AuditEntry {
     recommended_value: number | null;
     recommendation_id: string;
   };
+}
+
+// ---- Data & Model Evidence ----
+export interface VariableDefinition {
+  tag: string;
+  display_name: string;
+  unit: string;
+  role: string;
+  source: string;
+}
+
+export interface OutcomeSummary {
+  outcome: string;
+  event_count: number;
+  avg_stabilization_seconds: number;
+  avg_off_spec_seconds: number;
+  avg_max_deviation_pct: number;
+}
+
+export interface TrajectoryProfilePoint {
+  outcome: string;
+  progress_pct: number;
+  mean_deviation_pct: number;
+  p10_deviation_pct: number;
+  p90_deviation_pct: number;
+}
+
+export interface DataOverview {
+  provenance: {
+    source_type: string;
+    dataset_label: string;
+    storage: string;
+    generated_by: string;
+    synthetic: boolean;
+    deterministic_seed: number;
+    sample_interval_seconds: number;
+    event_count: number;
+    point_count: number;
+    start_time: string;
+    end_time: string;
+    machines: string[];
+    grades: string[];
+    grade_pairs: string[];
+    site_data_status: string;
+  };
+  outcome_counts: Record<string, number>;
+  data_quality: {
+    missing_cells: number;
+    completeness_pct: number;
+    avg_scanner_quality: number;
+    alarm_point_pct: number;
+  };
+  variables: VariableDefinition[];
+  split: {
+    strategy: string;
+    training_pool_events: number;
+    train_events: number;
+    validation_events: number;
+    test_events: number;
+    curated_demo_events: number;
+    demo_events_excluded: boolean;
+    future_window_leakage_prevented: boolean;
+  };
+  model_metrics: {
+    dataset?: Record<string, number>;
+    risk?: Record<string, number>;
+    trajectory_mae_gsm?: Record<string, number>;
+    stabilization_mae_seconds?: number;
+  };
+  outcome_summary: OutcomeSummary[];
+  trajectory_profiles: TrajectoryProfilePoint[];
+  feature_importance: { feature: string; importance: number }[];
+  relationships: {
+    source_parameter: string;
+    target_parameter: string;
+    strength: number;
+    lag_seconds: number;
+    is_interaction: boolean;
+    occurrences: number;
+    source: string;
+  }[];
+  processing_steps: { stage: string; detail: string }[];
+}
+
+export interface RecipeConstraint {
+  grade_id: string;
+  parameter: string;
+  min_val: number;
+  max_val: number;
+  optimal_val: number;
+  max_ramp_rate: number | null;
+}
+
+export interface DataValidationResult {
+  valid: boolean;
+  file_name: string;
+  row_count: number;
+  coverage_pct: number;
+  mapped_columns: Record<string, string>;
+  missing_columns: string[];
+  warnings: string[];
+  parse_errors: string[];
+  data_quality: {
+    numeric_completeness_pct: number;
+    validated_rows: number;
+    required_feature_window_rows: number;
+  };
+  preview: Record<string, unknown>[];
+  sandbox_note: string;
+}
+
+export interface ScenarioResult {
+  event_id: string;
+  timestamp: string;
+  feasible: boolean;
+  scenario_mode: string;
+  adjustments: {
+    parameter_name: string;
+    current_value: number;
+    proposed_value: number;
+    feasible: boolean;
+    constraint_message: string;
+    evidence_source: string;
+  }[];
+  risk_before: number;
+  risk_after: number;
+  stabilization_before: number;
+  stabilization_after: number;
+  off_spec_seconds_before: number;
+  off_spec_seconds_after: number;
+  avoided_off_spec_seconds: number;
+  confidence: number;
+  baseline_trajectory: TrajectoryPrediction;
+  counterfactual_trajectory: TrajectoryPrediction;
+  evidence_tags: EvidenceTag[];
+  guardrail: string;
+}
+
+export interface GroundedExplanation {
+  mode: 'grounded-template' | 'grounded-template-fallback' | 'openai-grounded';
+  model: string | null;
+  headline: string;
+  what_is_happening: string;
+  why: string;
+  suggested_response: string;
+  operator_checks: string[];
+  evidence: EvidenceTag[];
+  guardrail: string;
 }

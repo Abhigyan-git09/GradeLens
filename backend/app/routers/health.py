@@ -1,6 +1,6 @@
 """Health check endpoint."""
 
-from pathlib import Path
+import json
 
 from fastapi import APIRouter
 
@@ -21,17 +21,36 @@ def health_check():
         (model_dir / f"trajectory_{h}s.joblib").exists()
         for h in settings.PREDICTION_HORIZONS
     )
+    stabilization_model_exists = (
+        model_dir / "stabilization_knn.joblib"
+    ).exists()
 
-    if risk_model_exists and trajectory_models_exist:
+    if (
+        risk_model_exists
+        and trajectory_models_exist
+        and stabilization_model_exists
+    ):
         model_mode = "trained"
-    elif risk_model_exists or trajectory_models_exist:
+    elif (
+        risk_model_exists
+        or trajectory_models_exist
+        or stabilization_model_exists
+    ):
         model_mode = "partial"
     else:
         model_mode = "degraded"
 
+    metrics = None
+    metrics_path = model_dir / "metrics.json"
+    if metrics_path.exists():
+        try:
+            metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            metrics = None
     return {
         "status": "healthy",
         "model_mode": model_mode,
         "version": "0.1.0",
         "project": "GradeLens",
+        "metrics": metrics,
     }

@@ -11,6 +11,12 @@ import type {
   HealthStatus,
   AuditEntry,
   DiscoveredRelationship,
+  SimulationResult,
+  DataOverview,
+  DataValidationResult,
+  RecipeConstraint,
+  ScenarioResult,
+  GroundedExplanation,
 } from '../types';
 
 export interface SnapshotResponse {
@@ -61,6 +67,20 @@ export const getRecommendations = (eventId: string) =>
 export const generateRecommendation = (data: { event_id: string; timestamp: string }) =>
   api.post<Recommendation>('/recommendations/generate', data).then((r) => r.data);
 
+export const simulateRecommendation = (data: {
+  event_id: string;
+  timestamp: string;
+  parameter_name: string;
+  proposed_value: number;
+}) => api.post<SimulationResult>('/recommendations/simulate', data).then((r) => r.data);
+
+export const getRecommendationOpportunities = (
+  eventId: string,
+  timestamp: string,
+) => api.get<SimulationResult[]>('/recommendations/opportunities', {
+  params: { event_id: eventId, timestamp },
+}).then((r) => r.data);
+
 export const acceptRecommendation = (id: string) =>
   api.post<OperatorFeedback>(`/recommendations/${id}/accept`).then((r) => r.data);
 
@@ -71,11 +91,39 @@ export const modifyRecommendation = (id: string, value: number) =>
   api.post<OperatorFeedback>(`/recommendations/${id}/modify`, { value }).then((r) => r.data);
 
 // ---- Correlations (stretch) ----
-export const getCorrelations = (eventId: string) =>
-  api.get<DiscoveredRelationship[]>('/correlations', { params: { event_id: eventId } }).then((r) => r.data);
+export const getCorrelations = (eventId: string, timestamp?: string) =>
+  api.get<DiscoveredRelationship[]>('/correlations', {
+    params: { event_id: eventId, timestamp },
+  }).then((r) => r.data);
 
 // ---- Audit ----
 export const getAuditLog = () =>
   api.get<AuditEntry[]>('/audit/recommendations').then((r) => r.data);
+
+// ---- Data, Evidence & Scenario Intelligence ----
+export const getDataOverview = () =>
+  api.get<DataOverview>('/intelligence/data/overview').then((r) => r.data);
+
+export const getRecipeConstraints = (gradeId: string) =>
+  api.get<RecipeConstraint[]>(`/intelligence/recipes/${gradeId}`).then((r) => r.data);
+
+export const validateDataset = (data: {
+  file_name: string;
+  columns: string[];
+  rows: Record<string, unknown>[];
+}) => api.post<DataValidationResult>('/intelligence/data/validate', data).then((r) => r.data);
+
+export const runScenario = (data: {
+  event_id: string;
+  timestamp: string;
+  adjustments: { parameter_name: string; proposed_value: number }[];
+}) => api.post<ScenarioResult>('/intelligence/scenarios/run', data).then((r) => r.data);
+
+export const explainState = (data: {
+  event_id: string;
+  timestamp: string;
+  recommendation_id?: string;
+  prefer_llm?: boolean;
+}) => api.post<GroundedExplanation>('/intelligence/explain', data).then((r) => r.data);
 
 export default api;

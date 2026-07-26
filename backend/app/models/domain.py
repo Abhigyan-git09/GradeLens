@@ -8,6 +8,9 @@ from app.database import Base
 def generate_uuid():
     return str(uuid.uuid4())
 
+def utc_now_naive():
+    return datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+
 class GradeChangeEvent(Base):
     __tablename__ = "grade_change_events"
 
@@ -16,7 +19,7 @@ class GradeChangeEvent(Base):
     source_grade = Column(String)
     target_grade = Column(String)
     recipe_id = Column(String)
-    start_time = Column(DateTime, default=datetime.datetime.utcnow)
+    start_time = Column(DateTime, default=utc_now_naive)
     end_time = Column(DateTime, nullable=True)
     bw_old_target = Column(Float)
     bw_new_target = Column(Float)
@@ -32,7 +35,7 @@ class TimeseriesPoint(Base):
     __tablename__ = "timeseries_points"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow, index=True)
+    timestamp = Column(DateTime, default=utc_now_naive, index=True)
     event_id = Column(String, ForeignKey("grade_change_events.event_id"), index=True)
 
     basis_weight_actual = Column(Float)
@@ -49,6 +52,8 @@ class TimeseriesPoint(Base):
     moisture_setpoint = Column(Float)
     ash_actual = Column(Float)
     ash_setpoint = Column(Float)
+    caliper_actual = Column(Float)
+    caliper_setpoint = Column(Float)
     
     active_alarm_count = Column(Integer, default=0)
     scanner_quality_score = Column(Float, default=1.0)
@@ -60,7 +65,7 @@ class Recommendation(Base):
 
     recommendation_id = Column(String, primary_key=True, default=generate_uuid)
     event_id = Column(String, ForeignKey("grade_change_events.event_id"), index=True)
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+    timestamp = Column(DateTime, default=utc_now_naive)
     
     parameter_name = Column(String)
     current_value = Column(Float)
@@ -100,7 +105,7 @@ class OperatorFeedback(Base):
     response = Column(String) # accept, reject, modify
     operator_selected_value = Column(Float, nullable=True)
     rejection_reason = Column(String, nullable=True)
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+    timestamp = Column(DateTime, default=utc_now_naive)
 
     recommendation = relationship("Recommendation", back_populates="feedback")
 

@@ -8,19 +8,19 @@ import {
   ResponsiveContainer,
   ReferenceArea
 } from 'recharts';
-import type { TimeseriesPoint, TrajectoryPrediction, Recommendation } from '../types';
+import type { TimeseriesPoint, TrajectoryPrediction } from '../types';
 import { useMemo } from 'react';
 
 interface TrajectoryChartProps {
   timeseries: TimeseriesPoint[];
   prediction?: TrajectoryPrediction | null;
-  recommendation?: Recommendation | null;
+  counterfactual?: TrajectoryPrediction | null;
 }
 
 export default function TrajectoryChart({
   timeseries,
   prediction,
-  recommendation
+  counterfactual
 }: TrajectoryChartProps) {
   
   const chartData = useMemo(() => {
@@ -54,36 +54,33 @@ export default function TrajectoryChart({
           time: futureTime.toLocaleTimeString([], { hour12: false, minute: '2-digit', second: '2-digit' }),
           timestamp: futureTime.getTime(),
           actual: null as any,
-          setpoint: lastPoint.setpoint,
-          upperLimit: lastPoint.setpoint * 1.025,
-          lowerLimit: lastPoint.setpoint * 0.975,
+          setpoint: h.predicted_setpoint,
+          upperLimit: h.predicted_setpoint * 1.025,
+          lowerLimit: h.predicted_setpoint * 0.975,
           forecast: h.predicted_bw,
           recommended: null
         });
       });
     }
     
-    // If we have a recommendation that affects BW or just want to show stabilization trajectory
-    if (recommendation && prediction && prediction.horizons.length > 0) {
-      // Simple visual mock: recommended line converges to setpoint faster than forecast
-      // We start at last actual point
-      const futureDataPoints = data.filter(d => d.timestamp > lastPoint.timestamp);
-      
-      // Connect to last point
+    if (counterfactual && prediction && prediction.horizons.length > 0) {
       lastPoint.recommended = lastPoint.actual;
-      
-      futureDataPoints.forEach((d, idx) => {
-        // Linear convergence to setpoint for demonstration of "better trajectory"
-        const progress = Math.min(1, (idx + 1) / futureDataPoints.length);
-        const setpoint = d.setpoint;
-        const currentDiff = lastPoint.actual - setpoint;
-        // Recommended reduces diff faster
-        d.recommended = setpoint + (currentDiff * (1 - progress * 1.5));
+      const byHorizon = new Map(
+        counterfactual.horizons.map(horizon => [
+          horizon.seconds,
+          horizon.predicted_bw,
+        ])
+      );
+      data
+        .filter(d => d.timestamp > lastPoint.timestamp)
+        .forEach(d => {
+          const seconds = Math.round((d.timestamp - lastPoint.timestamp) / 1000);
+          d.recommended = byHorizon.get(seconds) ?? null;
       });
     }
     
     return data;
-  }, [timeseries, prediction, recommendation]);
+  }, [timeseries, prediction, counterfactual]);
 
   if (!chartData || chartData.length === 0) {
     return (
@@ -175,7 +172,7 @@ export default function TrajectoryChart({
           />
           
           {/* Recommended Line */}
-          {recommendation && (
+          {counterfactual && (
             <Line 
               type="monotone" 
               dataKey="recommended" 

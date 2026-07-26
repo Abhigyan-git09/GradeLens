@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict
-from typing import Optional, List
+from typing import Any, Optional, List
 from datetime import datetime
 
 class EvidenceTagSchema(BaseModel):
@@ -55,6 +55,8 @@ class TimeseriesPointSchema(BaseModel):
     moisture_setpoint: float
     ash_actual: float
     ash_setpoint: float
+    caliper_actual: float
+    caliper_setpoint: float
     active_alarm_count: int
     scanner_quality_score: float
 
@@ -94,12 +96,37 @@ class RiskPredictionSchema(BaseModel):
 class TrajectoryHorizonSchema(BaseModel):
     seconds: float
     predicted_bw: float
+    predicted_setpoint: float
     lower_bound: float
     upper_bound: float
 
 class TrajectoryPredictionSchema(BaseModel):
     horizons: List[TrajectoryHorizonSchema]
     model_mode: str
+
+class SimulationRequestSchema(BaseModel):
+    event_id: str
+    timestamp: datetime
+    parameter_name: str
+    proposed_value: float
+
+class SimulationResultSchema(BaseModel):
+    parameter_name: str
+    current_value: float
+    proposed_value: float
+    feasible: bool
+    constraint_message: str
+    risk_before: float
+    risk_after: float
+    stabilization_before: float
+    stabilization_after: float
+    off_spec_seconds_before: float
+    off_spec_seconds_after: float
+    avoided_off_spec_seconds: float
+    confidence: float
+    baseline_trajectory: TrajectoryPredictionSchema
+    counterfactual_trajectory: TrajectoryPredictionSchema
+    evidence_tags: List[EvidenceTagSchema] = []
 
 class StabilizationPredictionSchema(BaseModel):
     estimated_seconds: float
@@ -128,3 +155,146 @@ class SnapshotResponseSchema(BaseModel):
     root_causes: List[RootCauseSchema] = []
     recommendation: Optional[RecommendationSchema] = None
     correlations: List[DiscoveredRelationshipSchema] = []
+
+
+class VariableDefinitionSchema(BaseModel):
+    tag: str
+    display_name: str
+    unit: str
+    role: str
+    source: str
+
+
+class OutcomeSummarySchema(BaseModel):
+    outcome: str
+    event_count: int
+    avg_stabilization_seconds: float
+    avg_off_spec_seconds: float
+    avg_max_deviation_pct: float
+
+
+class TrajectoryProfilePointSchema(BaseModel):
+    outcome: str
+    progress_pct: int
+    mean_deviation_pct: float
+    p10_deviation_pct: float
+    p90_deviation_pct: float
+
+
+class FeatureImportanceSchema(BaseModel):
+    feature: str
+    importance: float
+
+
+class RelationshipSummarySchema(BaseModel):
+    source_parameter: str
+    target_parameter: str
+    strength: float
+    lag_seconds: int
+    is_interaction: bool
+    occurrences: int
+    source: str
+
+
+class DataOverviewSchema(BaseModel):
+    provenance: dict[str, Any]
+    outcome_counts: dict[str, int]
+    data_quality: dict[str, float | int]
+    variables: List[VariableDefinitionSchema]
+    split: dict[str, int | str | bool]
+    model_metrics: dict[str, Any]
+    outcome_summary: List[OutcomeSummarySchema]
+    trajectory_profiles: List[TrajectoryProfilePointSchema]
+    feature_importance: List[FeatureImportanceSchema]
+    relationships: List[RelationshipSummarySchema]
+    processing_steps: List[dict[str, str]]
+
+
+class RecipeConstraintSchema(BaseModel):
+    grade_id: str
+    parameter: str
+    min_val: float
+    max_val: float
+    optimal_val: float
+    max_ramp_rate: Optional[float] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DataValidationRequestSchema(BaseModel):
+    file_name: str
+    columns: List[str]
+    rows: List[dict[str, Any]]
+
+
+class DataValidationResponseSchema(BaseModel):
+    valid: bool
+    file_name: str
+    row_count: int
+    coverage_pct: float
+    mapped_columns: dict[str, str]
+    missing_columns: List[str]
+    warnings: List[str]
+    parse_errors: List[str]
+    data_quality: dict[str, float | int]
+    preview: List[dict[str, Any]]
+    sandbox_note: str
+
+
+class ScenarioAdjustmentSchema(BaseModel):
+    parameter_name: str
+    proposed_value: float
+
+
+class ScenarioRequestSchema(BaseModel):
+    event_id: str
+    timestamp: datetime
+    adjustments: List[ScenarioAdjustmentSchema]
+
+
+class ScenarioAdjustmentResultSchema(BaseModel):
+    parameter_name: str
+    current_value: float
+    proposed_value: float
+    feasible: bool
+    constraint_message: str
+    evidence_source: str
+
+
+class ScenarioResultSchema(BaseModel):
+    event_id: str
+    timestamp: datetime
+    feasible: bool
+    scenario_mode: str
+    adjustments: List[ScenarioAdjustmentResultSchema]
+    risk_before: float
+    risk_after: float
+    stabilization_before: float
+    stabilization_after: float
+    off_spec_seconds_before: float
+    off_spec_seconds_after: float
+    avoided_off_spec_seconds: float
+    confidence: float
+    baseline_trajectory: TrajectoryPredictionSchema
+    counterfactual_trajectory: TrajectoryPredictionSchema
+    evidence_tags: List[EvidenceTagSchema]
+    guardrail: str
+
+
+class ExplanationRequestSchema(BaseModel):
+    event_id: str
+    timestamp: datetime
+    recommendation_id: Optional[str] = None
+    prefer_llm: bool = False
+
+
+class ExplanationResponseSchema(BaseModel):
+    mode: str
+    model: Optional[str] = None
+    headline: str
+    what_is_happening: str
+    why: str
+    suggested_response: str
+    operator_checks: List[str]
+    evidence: List[EvidenceTagSchema]
+    guardrail: str

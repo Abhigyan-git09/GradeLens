@@ -10,16 +10,33 @@ class StabilizationService:
     def __init__(self):
         self.model_path = os.path.join(MODEL_DIR, "stabilization_knn.joblib")
         self.model = None
+        self.neighbor_model = None
+        self.neighbor_count = 0
         self.is_trained = False
         self._load_model()
 
     def _load_model(self):
+        self.model = None
+        self.neighbor_model = None
+        self.neighbor_count = 0
+        self.is_trained = False
         if os.path.exists(self.model_path):
             try:
-                self.model = joblib.load(self.model_path)
+                artifact = joblib.load(self.model_path)
+                if isinstance(artifact, dict):
+                    self.model = artifact["regressor"]
+                    self.neighbor_model = artifact.get("neighbors")
+                    self.neighbor_count = int(
+                        artifact.get("neighbor_count", 0)
+                    )
+                else:
+                    self.model = artifact
                 self.is_trained = True
             except Exception:
                 pass
+
+    def reload_model(self):
+        self._load_model()
 
     def estimate_stabilization(self, features: Dict[str, float]) -> dict:
         """Estimate remaining stabilization time using k-NN."""
@@ -39,10 +56,13 @@ class StabilizationService:
 
         # Predict time directly from KNN Regressor
         est_time = float(self.model.predict(X)[0])
+        if self.neighbor_model is not None:
+            neighbor_time = float(self.neighbor_model.predict(X)[0])
+            est_time = 0.8 * est_time + 0.2 * neighbor_time
         
         return {
             "estimated_seconds": max(0.0, round(est_time, 1)),
-            "similar_events_used": 3,
+            "similar_events_used": self.neighbor_count,
             "model_mode": "trained"
         }
 

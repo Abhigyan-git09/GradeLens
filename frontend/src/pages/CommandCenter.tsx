@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { lazy, Suspense, useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -18,6 +18,9 @@ import {
   SkipForward,
   ChevronRight,
   CheckCircle,
+  BrainCircuit,
+  RefreshCw,
+  ShieldCheck,
 } from 'lucide-react'
 import {
   getGradeChange,
@@ -25,13 +28,17 @@ import {
   getAuditLog,
   getSnapshot,
   generateRecommendation,
+  simulateRecommendation,
+  getRecommendationOpportunities,
   acceptRecommendation,
   rejectRecommendation,
   modifyRecommendation,
   getCorrelations,
+  explainState,
 } from '../api/client'
-import TrajectoryChart from '../components/TrajectoryChart'
-import InfluenceGraph from '../components/InfluenceGraph'
+import type { GroundedExplanation, Recommendation } from '../types'
+const TrajectoryChart = lazy(() => import('../components/TrajectoryChart'))
+const InfluenceGraph = lazy(() => import('../components/InfluenceGraph'))
 
 /* =====================================================
    Animation Variants — staggered cascade reveals
@@ -252,25 +259,84 @@ export default function CommandCenter() {
   const trajectoryData = snapshot?.trajectory;
   const stabilizationData = snapshot?.stabilization;
   const rootCauses = snapshot?.root_causes;
-  const currentFeatures = snapshot?.current_features;
-
-
-
-
-  
   // Actually just store the generated rec in state to avoid query loop
-  const [currentRec, setCurrentRec] = useState<any>(null)
+  const [currentRec, setCurrentRec] = useState<Recommendation | null>(null)
+  const [isRejecting, setIsRejecting] = useState(false)
+  const [rejectionReason, setRejectionReason] = useState('')
+  const [explanation, setExplanation] = useState<GroundedExplanation | null>(null)
+  const [isExplaining, setIsExplaining] = useState(false)
+  const [explanationError, setExplanationError] = useState('')
+  const [preferLlm, setPreferLlm] = useState(false)
+
+  // Recommendations are specific to one event/timestamp. Never carry an
+  // operator action across to a different grade-change replay.
+  useEffect(() => {
+    setCurrentRec(null)
+    setSimulatedValue(null)
+    setIsRejecting(false)
+    setRejectionReason('')
+    setExplanation(null)
+    setExplanationError('')
+  }, [eventId, currentPoint?.timestamp])
   
   const generateRec = async () => {
     try {
       if (!currentPoint) return;
       const rec = await generateRecommendation({ event_id: eventId, timestamp: currentPoint.timestamp })
       setCurrentRec(rec)
-      setSimulatedValue({ parameter: rec.parameter_name, value: rec.recommended_value })
+      setExplanation(null)
+      setSimulatedValue(
+        rec.parameter_name === 'No intervention'
+          ? null
+          : { parameter: rec.parameter_name, value: rec.recommended_value }
+      )
     } catch (e) {
       console.error(e)
     }
   }
+
+  const explainCurrentState = async () => {
+    if (!currentPoint) return
+    setIsExplaining(true)
+    setExplanationError('')
+    try {
+      const result = await explainState({
+        event_id: eventId,
+        timestamp: currentPoint.timestamp,
+        recommendation_id: currentRec?.recommendation_id,
+        prefer_llm: preferLlm,
+      })
+      setExplanation(result)
+    } catch {
+      setExplanationError('The selected point needs a complete 60-second history window before it can be explained.')
+    } finally {
+      setIsExplaining(false)
+    }
+  }
+
+  const [debouncedSimulation, setDebouncedSimulation] = useState(simulatedValue)
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSimulation(simulatedValue), 250)
+    return () => window.clearTimeout(timer)
+  }, [simulatedValue])
+
+  const { data: simulation, isFetching: isSimulating } = useQuery({
+    queryKey: [
+      'simulation',
+      eventId,
+      currentPoint?.timestamp,
+      debouncedSimulation?.parameter,
+      debouncedSimulation?.value,
+    ],
+    queryFn: () => simulateRecommendation({
+      event_id: eventId,
+      timestamp: currentPoint!.timestamp,
+      parameter_name: debouncedSimulation!.parameter,
+      proposed_value: debouncedSimulation!.value,
+    }),
+    enabled: !!currentPoint && !!debouncedSimulation && currentRec?.parameter_name !== 'No intervention',
+    staleTime: 10_000,
+  })
 
   // 7. Action Mutations
   const acceptMutation = useMutation({
@@ -279,11 +345,14 @@ export default function CommandCenter() {
       queryClient.invalidateQueries({ queryKey: ['audit'] })
       setCurrentRec(null)
       setSimulatedValue(null)
+      setIsRejecting(false)
+      setRejectionReason('')
     }
   })
 
   const rejectMutation = useMutation({
-    mutationFn: (id: string) => rejectRecommendation(id, "Operator override"),
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      rejectRecommendation(id, reason),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['audit'] })
       setCurrentRec(null)
@@ -309,10 +378,41 @@ export default function CommandCenter() {
   
   // 9. Correlations for Influence Graph
   const { data: correlations } = useQuery({
-    queryKey: ['correlations', eventId],
-    queryFn: () => getCorrelations(eventId),
-    enabled: !!eventId,
+    queryKey: ['correlations', eventId, currentPoint?.timestamp],
+    queryFn: () => getCorrelations(eventId, currentPoint?.timestamp),
+    enabled: !!eventId && !!currentPoint,
   })
+
+  const { data: opportunities } = useQuery({
+    queryKey: ['opportunities', eventId, currentPoint?.timestamp],
+    queryFn: () => getRecommendationOpportunities(
+      eventId,
+      currentPoint!.timestamp,
+    ),
+    enabled: !!currentPoint && !isPlaying && (riskData?.probability ?? 0) >= 0.5,
+    staleTime: 10_000,
+  })
+
+  const hasCorrectiveAction = currentRec?.parameter_name !== 'No intervention'
+  const hasOperatorOverride = !!(
+    currentRec
+    && simulatedValue
+    && Math.abs(simulatedValue.value - currentRec.recommended_value) > 0.001
+  )
+  const riskBefore = simulation?.risk_before ?? currentRec?.risk_before ?? 0
+  const riskAfter = simulation?.risk_after ?? currentRec?.risk_after ?? 0
+  const stabilizationBefore = simulation?.stabilization_before ?? currentRec?.stabilization_before ?? 0
+  const stabilizationAfter = simulation?.stabilization_after ?? currentRec?.stabilization_after ?? 0
+  const evidenceTags = simulation?.evidence_tags ?? currentRec?.evidence_tags ?? []
+  const isCurrentlyOffSpec = currentPoint
+    ? Math.abs(currentPoint.basis_weight_actual - currentPoint.basis_weight_setpoint)
+      / currentPoint.basis_weight_setpoint > 0.025
+    : false
+  const violationTiming = riskData?.time_to_violation_seconds != null
+    ? `~${Math.round(riskData.time_to_violation_seconds)}s`
+    : isCurrentlyOffSpec
+      ? 'Limit exceeded'
+      : 'Not imminent'
 
   return (
     <motion.div
@@ -326,9 +426,15 @@ export default function CommandCenter() {
         <div>
           <div className="flex items-center gap-3">
             <h2 className="text-lg font-semibold tracking-tight">Command Center</h2>
-            <span className="text-[0.6rem] uppercase tracking-widest font-semibold px-2 py-0.5 rounded-full border border-status-stable/30 bg-status-stable/10 text-status-stable flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-status-stable animate-pulse" />
-              Model Health: Active
+            <span className={`text-[0.6rem] uppercase tracking-widest font-semibold px-2 py-0.5 rounded-full border flex items-center gap-1.5 ${
+              riskData?.model_mode === 'trained'
+                ? 'border-status-stable/30 bg-status-stable/10 text-status-stable'
+                : 'border-status-warning/30 bg-status-warning/10 text-status-warning'
+            }`}>
+              <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${
+                riskData?.model_mode === 'trained' ? 'bg-status-stable' : 'bg-status-warning'
+              }`} />
+              {riskData?.model_mode === 'trained' ? 'Models Validated' : 'Model Status Pending'}
             </span>
           </div>
           <p className="text-sm text-text-muted mt-0.5">
@@ -383,6 +489,48 @@ export default function CommandCenter() {
         </div>
       </motion.div>
 
+      {timeseries && timeseries.length > 0 && (
+        <motion.div
+          variants={itemVariants}
+          className="panel px-4 py-2.5 flex items-center gap-3"
+        >
+          <span className="text-[0.625rem] uppercase tracking-wider font-medium text-text-muted whitespace-nowrap">
+            Replay position
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={timeseries.length - 1}
+            step={1}
+            value={currentIndex}
+            aria-label="Transition replay position"
+            onChange={(event) => {
+              setIsPlaying(false)
+              setPlaybackIndex(Number(event.target.value))
+            }}
+            className="w-full accent-accent h-1.5 bg-panel-surface rounded-lg appearance-none cursor-pointer"
+          />
+          <input
+            type="number"
+            min={0}
+            max={timeseries.length - 1}
+            step={1}
+            value={currentIndex}
+            aria-label="Transition replay sample"
+            onChange={(event) => {
+              const requestedIndex = Number(event.target.value)
+              if (!Number.isFinite(requestedIndex)) return
+              setIsPlaying(false)
+              setPlaybackIndex(Math.max(0, Math.min(timeseries.length - 1, Math.round(requestedIndex))))
+            }}
+            className="w-16 rounded border border-panel-border bg-panel-bg px-2 py-1 text-right data-value text-[0.625rem] text-text-secondary outline-none focus:border-accent"
+          />
+          <span className="data-value text-[0.625rem] text-text-muted tabular-nums whitespace-nowrap">
+            {currentIndex + 1} / {timeseries.length}
+          </span>
+        </motion.div>
+      )}
+
       {/* ---- Row 1: Trajectory Chart + Risk Panel ---- */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
         {/* Signature Element: Trajectory Chart — spans 8 columns */}
@@ -414,11 +562,13 @@ export default function CommandCenter() {
               )}
             </div>
           </div>
-          <TrajectoryChart 
-            timeseries={visibleTimeseries} 
-            prediction={trajectoryData}
-            recommendation={currentRec}
-          />
+          <Suspense fallback={<div className="flex-1 skeleton" />}>
+            <TrajectoryChart
+              timeseries={visibleTimeseries}
+              prediction={trajectoryData}
+              counterfactual={simulation?.counterfactual_trajectory}
+            />
+          </Suspense>
         </motion.div>
 
         {/* Risk Panel — spans 4 columns */}
@@ -469,7 +619,13 @@ export default function CommandCenter() {
                 <span className="text-xs text-text-muted flex items-center gap-1.5">
                   <Clock className="w-3 h-3 text-status-critical" /> Time to Violation
                 </span>
-                <span className="data-value text-xs font-semibold text-status-critical">~{riskData?.time_to_violation_seconds ? Math.round(riskData.time_to_violation_seconds) : '--'}s</span>
+                <span className={`data-value text-xs font-semibold ${
+                  isCurrentlyOffSpec || riskData?.time_to_violation_seconds != null
+                    ? 'text-status-critical'
+                    : 'text-text-muted'
+                }`}>
+                  {violationTiming}
+                </span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-xs text-text-muted flex items-center gap-1.5">
@@ -515,7 +671,7 @@ export default function CommandCenter() {
           Process Parameters
         </h3>
         <motion.div
-          className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3"
+          className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3"
           variants={containerVariants}
           initial="hidden"
           animate="visible"
@@ -526,8 +682,117 @@ export default function CommandCenter() {
           <MetricCard icon={Flame} label="Steam Press" value={currentPoint?.steam_pressure_actual.toFixed(2) || '--'} unit="bar" setpoint={currentPoint?.steam_pressure_setpoint.toFixed(2)} deviation={currentPoint ? `${((currentPoint.steam_pressure_actual - currentPoint.steam_pressure_setpoint)/currentPoint.steam_pressure_setpoint * 100).toFixed(1)}%` : undefined} status="stable" />
           <MetricCard icon={Gauge} label="Machine Spd" value={currentPoint?.machine_speed_actual.toFixed(0) || '--'} unit="m/min" setpoint={currentPoint?.machine_speed_setpoint.toFixed(0)} deviation={currentPoint ? `${((currentPoint.machine_speed_actual - currentPoint.machine_speed_setpoint)/currentPoint.machine_speed_setpoint * 100).toFixed(1)}%` : undefined} status="warning" />
           <MetricCard icon={Droplets} label="Moisture" value={currentPoint?.moisture_actual.toFixed(1) || '--'} unit="%" setpoint={currentPoint?.moisture_setpoint.toFixed(1)} deviation={currentPoint ? `${((currentPoint.moisture_actual - currentPoint.moisture_setpoint)/currentPoint.moisture_setpoint * 100).toFixed(1)}%` : undefined} status="stable" />
+          <MetricCard icon={Layers} label="Ash" value={currentPoint?.ash_actual.toFixed(1) || '--'} unit="%" setpoint={currentPoint?.ash_setpoint.toFixed(1)} deviation={currentPoint ? `${((currentPoint.ash_actual - currentPoint.ash_setpoint)/currentPoint.ash_setpoint * 100).toFixed(1)}%` : undefined} status="stable" />
+          <MetricCard icon={Gauge} label="Caliper" value={currentPoint?.caliper_actual.toFixed(1) || '--'} unit="µm" setpoint={currentPoint?.caliper_setpoint.toFixed(1)} deviation={currentPoint ? `${((currentPoint.caliper_actual - currentPoint.caliper_setpoint)/currentPoint.caliper_setpoint * 100).toFixed(1)}%` : undefined} status="stable" />
         </motion.div>
       </motion.div>
+
+      {/* ---- Grounded Operator Explanation ---- */}
+      <motion.section variants={itemVariants} className="panel panel-accent p-5">
+        <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
+          <div className="flex items-start gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded bg-status-predicted/10">
+              <BrainCircuit className="h-5 w-5 text-status-predicted" />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold">Operator Explanation</h3>
+              <p className="mt-1 text-[0.6875rem] text-text-muted">
+                Plain-language rendering of the current risk, local drivers, historical relationships, and constrained action.
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="flex cursor-pointer items-center gap-2 text-[0.6875rem] text-text-secondary">
+              <input
+                type="checkbox"
+                checked={preferLlm}
+                onChange={(event) => setPreferLlm(event.target.checked)}
+                className="accent-accent"
+              />
+              Use configured LLM renderer
+            </label>
+            <button
+              type="button"
+              onClick={explainCurrentState}
+              disabled={!currentPoint || isExplaining}
+              className="btn btn-outline !px-3 !py-1.5 !text-[0.6875rem] disabled:opacity-45"
+            >
+              {explanation ? <RefreshCw className="h-3.5 w-3.5" /> : <BrainCircuit className="h-3.5 w-3.5" />}
+              {isExplaining ? 'Explaining…' : explanation ? 'Refresh explanation' : 'Explain current state'}
+            </button>
+          </div>
+        </div>
+
+        {explanationError && (
+          <p className="mt-4 rounded border border-status-critical/20 bg-status-critical/5 p-3 text-xs text-status-critical">
+            {explanationError}
+          </p>
+        )}
+
+        {explanation ? (
+          <div className="mt-5">
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded border border-status-predicted/20 bg-status-predicted/5 p-4">
+              <p className="text-base font-semibold">{explanation.headline}</p>
+              <span className="evidence-tag text-status-predicted">
+                {explanation.mode === 'openai-grounded'
+                  ? `OpenAI grounded · ${explanation.model}`
+                  : explanation.mode === 'grounded-template-fallback'
+                    ? 'Verified template · LLM fallback'
+                    : 'Verified deterministic template'}
+              </span>
+            </div>
+            <div className="mt-3 grid gap-3 lg:grid-cols-3">
+              {[
+                ['What is happening', explanation.what_is_happening],
+                ['Why the model thinks so', explanation.why],
+                ['Suggested response', explanation.suggested_response],
+              ].map(([label, text]) => (
+                <div key={label} className="rounded border border-panel-border/50 bg-panel-bg/35 p-4">
+                  <p className="text-[0.625rem] font-semibold uppercase tracking-wider text-accent">{label}</p>
+                  <p className="mt-2 text-xs leading-5 text-text-secondary">{text}</p>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_1.2fr]">
+              <div className="rounded border border-panel-border/50 bg-panel-bg/35 p-4">
+                <p className="text-[0.625rem] font-semibold uppercase tracking-wider text-text-muted">Verify before acting</p>
+                <div className="mt-2 space-y-2">
+                  {explanation.operator_checks.map((check) => (
+                    <p key={check} className="flex gap-2 text-[0.6875rem] leading-5 text-text-secondary">
+                      <CheckCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-status-stable" />
+                      {check}
+                    </p>
+                  ))}
+                </div>
+              </div>
+              <div className="rounded border border-panel-border/50 bg-panel-bg/35 p-4">
+                <p className="text-[0.625rem] font-semibold uppercase tracking-wider text-text-muted">Grounding sources</p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {explanation.evidence.map((item, index) => (
+                    <span
+                      key={`${item.tag}-${index}`}
+                      className="evidence-tag"
+                      title={`${item.source}: ${item.detail}`}
+                    >
+                      {item.tag}
+                    </span>
+                  ))}
+                </div>
+                <p className="mt-3 flex gap-2 text-[0.625rem] leading-5 text-status-warning">
+                  <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  {explanation.guardrail}
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-4 rounded border border-dashed border-panel-border bg-panel-bg/30 p-5 text-center">
+            <p className="text-xs text-text-secondary">
+              Click “Explain current state” at any replay point. The deterministic mode works offline; the optional LLM only rewrites the same structured facts.
+            </p>
+          </div>
+        )}
+      </motion.section>
 
       {/* ---- Row 3: Root Cause + Recommendation ---- */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
@@ -549,6 +814,23 @@ export default function CommandCenter() {
               />
             ))}
           </div>
+          {opportunities && opportunities.length > 0 && (
+            <div className="mt-6 pt-4 border-t border-panel-border/50">
+              <p className="text-[0.625rem] text-text-muted uppercase tracking-wider font-medium mb-3">
+                Stabilization Levers
+              </p>
+              <div className="space-y-2">
+                {opportunities.slice(0, 3).map((item) => (
+                  <div key={item.parameter_name} className="flex items-center justify-between text-xs bg-panel-bg/40 px-3 py-2 rounded border border-panel-border/40">
+                    <span className="font-medium">{item.parameter_name}</span>
+                    <span className="data-value text-status-stable">
+                      −{Math.max(0, item.stabilization_before - item.stabilization_after).toFixed(0)}s · risk {Math.round(item.risk_after * 100)}%
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </motion.div>
 
         {/* Recommendation Card */}
@@ -559,7 +841,7 @@ export default function CommandCenter() {
             </h3>
             {currentRec ? (
               <span className="text-[0.625rem] font-medium text-accent bg-accent/8 px-2 py-0.5 rounded-full border border-accent/15">
-                Confidence: {Math.round(currentRec.confidence * 100)}%
+                Confidence: {Math.round((simulation?.confidence ?? currentRec.confidence) * 100)}%
               </span>
             ) : (
               <button onClick={generateRec} className="btn btn-primary !py-1 !text-[0.6875rem]">
@@ -575,46 +857,58 @@ export default function CommandCenter() {
               <div className="bg-panel-bg/60 rounded-xl p-4 mb-4 border border-panel-border/50">
                 <div className="flex items-center gap-2 mb-3">
                   <div className="w-8 h-8 rounded-lg bg-status-stable/10 flex items-center justify-center">
-                    {simulatedValue !== null && simulatedValue.value < currentRec.current_value ? <TrendingDown className="w-4 h-4 text-status-stable" /> : <TrendingUp className="w-4 h-4 text-status-stable" />}
+                    {!hasCorrectiveAction ? <CheckCircle className="w-4 h-4 text-status-stable" /> : simulatedValue !== null && simulatedValue.value < currentRec.current_value ? <TrendingDown className="w-4 h-4 text-status-stable" /> : <TrendingUp className="w-4 h-4 text-status-stable" />}
                   </div>
                   <div>
-                    <p className="text-sm font-semibold">{simulatedValue !== null && simulatedValue.value < currentRec.current_value ? 'Reduce' : 'Increase'} {currentRec.parameter_name} Setpoint</p>
-                    <p className="text-[0.6875rem] text-text-muted">{currentRec.rationale}</p>
-                    <p className="text-[0.625rem] text-status-stable mt-1.5 font-medium bg-status-stable/10 border border-status-stable/20 px-2 py-0.5 rounded inline-block shadow-sm">
-                      <TrendingDown className="w-2.5 h-2.5 inline mr-1" />
-                      Business Impact: Prevents ~$4,500/hr in off-spec waste
+                    <p className="text-sm font-semibold">
+                      {!hasCorrectiveAction
+                        ? 'Continue Monitoring'
+                        : `${simulatedValue !== null && simulatedValue.value < currentRec.current_value ? 'Reduce' : 'Increase'} ${currentRec.parameter_name} Setpoint`}
                     </p>
+                    <p className="text-[0.6875rem] text-text-muted">{currentRec.rationale}</p>
+                    {simulation && (
+                      <p className="text-[0.625rem] text-status-stable mt-1.5 font-medium bg-status-stable/10 border border-status-stable/20 px-2 py-0.5 rounded inline-block shadow-sm">
+                        <TrendingDown className="w-2.5 h-2.5 inline mr-1" />
+                        Projected off-spec exposure reduced by {simulation.avoided_off_spec_seconds.toFixed(0)}s
+                      </p>
+                    )}
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-3 mb-4">
+                {hasCorrectiveAction && <div className="grid grid-cols-3 gap-3 mb-4">
                   <div className="bg-panel-surface/50 rounded-lg p-3 text-center">
                     <p className="text-[0.625rem] text-text-muted mb-1 uppercase tracking-wider">Current</p>
                     <p className="data-value text-base font-semibold">{currentRec.current_value.toFixed(1)}</p>
                   </div>
                   <div className="bg-status-stable/5 rounded-lg p-3 text-center border border-status-stable/15 relative">
-                    <p className="text-[0.625rem] text-status-stable mb-1 uppercase tracking-wider font-medium">Recommended</p>
+                    <p className="text-[0.625rem] text-status-stable mb-1 uppercase tracking-wider font-medium">
+                      {hasOperatorOverride ? 'Operator Override' : 'Recommended'}
+                    </p>
                     <p className="data-value text-base font-bold text-status-stable">{simulatedValue?.value.toFixed(1)}</p>
                   </div>
                   <div className="bg-panel-surface/50 rounded-lg p-3 text-center">
                     <p className="text-[0.625rem] text-text-muted mb-1 uppercase tracking-wider">Sim Ramp</p>
                     <p className="data-value text-base font-semibold">
-                      {simulatedValue !== null && currentPoint ? ((simulatedValue.value - (simulatedValue.parameter === 'Stock Flow' ? currentPoint.stock_flow_actual : currentPoint.machine_speed_actual)) / 15.0).toFixed(1) : currentRec.recommended_ramp_rate}
+                      {simulatedValue !== null ? ((simulatedValue.value - currentRec.current_value) / 15.0).toFixed(2) : currentRec.recommended_ramp_rate.toFixed(2)}
                     </p>
                     <p className="text-[0.625rem] text-text-muted">/s</p>
                   </div>
-                </div>
-                
+                </div>}
+
                 {/* Simulator Slider */}
-                <div className="mb-5 px-1">
+                {hasCorrectiveAction && <div className="mb-5 px-1">
                   <div className="flex justify-between items-center mb-1">
                     <span className="text-[0.6875rem] text-text-muted font-medium">Setpoint Simulator Override</span>
-                    <span className="text-[0.625rem] text-accent">Live Inference Active</span>
+                    <span className="text-[0.625rem] text-accent">
+                      {isSimulating ? 'Recalculating…' : simulation?.feasible ? 'Counterfactual Ready' : 'Checking Constraints'}
+                    </span>
                   </div>
                   <input 
                     type="range" 
                     min={currentRec.current_value * 0.9} 
                     max={currentRec.current_value * 1.1} 
+                    step="any"
+                    aria-label={`${currentRec.parameter_name} simulated setpoint`}
                     value={simulatedValue?.value ?? currentRec.recommended_value}
                     onChange={(e) => setSimulatedValue({ parameter: currentRec.parameter_name, value: Number(e.target.value) })}
                     className="w-full accent-accent h-1.5 bg-panel-surface rounded-lg appearance-none cursor-pointer"
@@ -624,26 +918,69 @@ export default function CommandCenter() {
                     <span>Engine Default: {currentRec.recommended_value}</span>
                     <span>+10%</span>
                   </div>
-                </div>
+                  <div className="mt-2 flex items-center gap-2">
+                    <label
+                      htmlFor="simulated-setpoint-value"
+                      className="text-[0.625rem] text-text-muted"
+                    >
+                      Precise override
+                    </label>
+                    <input
+                      id="simulated-setpoint-value"
+                      type="number"
+                      min={currentRec.current_value * 0.9}
+                      max={currentRec.current_value * 1.1}
+                      step="any"
+                      value={simulatedValue?.value ?? currentRec.recommended_value}
+                      aria-label={`${currentRec.parameter_name} simulated setpoint value`}
+                      onChange={(event) => {
+                        if (event.target.value === '') return
+                        setSimulatedValue({
+                          parameter: currentRec.parameter_name,
+                          value: Number(event.target.value),
+                        })
+                      }}
+                      className="w-28 rounded border border-panel-border bg-panel-bg px-2 py-1 text-right data-value text-[0.6875rem] text-text-secondary outline-none focus:border-accent"
+                    />
+                    <span className="text-[0.625rem] text-text-muted">
+                      Enter an exact operator setpoint
+                    </span>
+                  </div>
+                  {simulation && (
+                    <p className={`text-[0.625rem] mt-2 ${simulation.feasible ? 'text-status-stable' : 'text-status-critical'}`}>
+                      {simulation.constraint_message}
+                    </p>
+                  )}
+                </div>}
 
                 {/* Before / After Metrics */}
-                <div className="grid grid-cols-2 gap-3">
+                <div className={`grid ${simulation ? 'grid-cols-3' : 'grid-cols-2'} gap-3`}>
                   <div className="flex items-center justify-between bg-panel-surface/30 rounded-lg px-3 py-2">
-                    <span className="text-[0.6875rem] text-text-muted">Risk</span>
+                    <span className="text-[0.6875rem] text-text-muted">Horizon Risk</span>
                     <div className="flex items-center gap-2">
-                      <span className="data-value text-xs text-status-warning">{Math.round(currentRec.risk_before * 100)}%</span>
+                      <span className="data-value text-xs text-status-warning">{Math.round(riskBefore * 100)}%</span>
                       <ChevronRight className="w-3 h-3 text-text-muted" />
-                      <span className="data-value text-xs text-status-stable font-semibold">{Math.round(currentRec.risk_after * 100)}%</span>
+                      <span className="data-value text-xs text-status-stable font-semibold">{Math.round(riskAfter * 100)}%</span>
                     </div>
                   </div>
                   <div className="flex items-center justify-between bg-panel-surface/30 rounded-lg px-3 py-2">
                     <span className="text-[0.6875rem] text-text-muted">Stabilization</span>
                     <div className="flex items-center gap-2">
-                      <span className="data-value text-xs text-text-secondary">{(currentRec.stabilization_before / 60).toFixed(1)}m</span>
+                      <span className="data-value text-xs text-text-secondary">{(stabilizationBefore / 60).toFixed(1)}m</span>
                       <ChevronRight className="w-3 h-3 text-text-muted" />
-                      <span className="data-value text-xs text-status-stable font-semibold">{(currentRec.stabilization_after / 60).toFixed(1)}m</span>
+                      <span className="data-value text-xs text-status-stable font-semibold">{(stabilizationAfter / 60).toFixed(1)}m</span>
                     </div>
                   </div>
+                  {simulation && (
+                    <div className="flex items-center justify-between bg-panel-surface/30 rounded-lg px-3 py-2">
+                      <span className="text-[0.6875rem] text-text-muted">Off-spec</span>
+                      <div className="flex items-center gap-2">
+                        <span className="data-value text-xs text-status-warning">{simulation.off_spec_seconds_before.toFixed(0)}s</span>
+                        <ChevronRight className="w-3 h-3 text-text-muted" />
+                        <span className="data-value text-xs text-status-stable font-semibold">{simulation.off_spec_seconds_after.toFixed(0)}s</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -651,7 +988,7 @@ export default function CommandCenter() {
               <div className="mb-5">
                 <p className="text-[0.625rem] text-text-muted uppercase tracking-wider font-medium mb-2">Evidence Sources</p>
                 <div className="flex flex-wrap gap-1.5">
-                  {currentRec.evidence_tags.map((tag: any) => (
+                  {evidenceTags.map((tag) => (
                     <span key={tag.tag} className="evidence-tag" title={`${tag.source}: ${tag.detail}`}>{tag.tag}</span>
                   ))}
                 </div>
@@ -667,20 +1004,62 @@ export default function CommandCenter() {
                   {acceptMutation.isPending ? 'Accepting...' : 'Accept Recommendation'}
                 </button>
                 <button 
-                  onClick={() => rejectMutation.mutate(currentRec.recommendation_id)}
+                  onClick={() => setIsRejecting(true)}
                   className="btn btn-danger"
                   disabled={rejectMutation.isPending}
                 >
                   Reject
                 </button>
-                <button
-                  onClick={() => modifyMutation.mutate({ id: currentRec.recommendation_id, value: simulatedValue?.value ?? currentRec.recommended_value })}
-                  className="btn btn-outline"
-                  disabled={modifyMutation.isPending}
-                >
-                  {modifyMutation.isPending ? 'Modifying...' : 'Modify'}
-                </button>
+                {hasCorrectiveAction && (
+                  <button
+                    onClick={() => modifyMutation.mutate({ id: currentRec.recommendation_id, value: simulatedValue?.value ?? currentRec.recommended_value })}
+                    className="btn btn-outline"
+                    disabled={modifyMutation.isPending || simulation?.feasible === false}
+                  >
+                    {modifyMutation.isPending ? 'Modifying...' : 'Modify'}
+                  </button>
+                )}
               </div>
+              {isRejecting && (
+                <div className="mt-3 rounded-lg border border-status-critical/20 bg-status-critical/5 p-3">
+                  <label
+                    htmlFor="rejection-reason"
+                    className="block text-[0.6875rem] font-medium text-text-secondary mb-2"
+                  >
+                    Rejection reason
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      id="rejection-reason"
+                      type="text"
+                      value={rejectionReason}
+                      placeholder="Record why this action is not appropriate"
+                      onChange={(event) => setRejectionReason(event.target.value)}
+                      className="flex-1 rounded border border-panel-border bg-panel-bg px-3 py-2 text-xs text-text-primary outline-none focus:border-status-critical"
+                    />
+                    <button
+                      onClick={() => rejectMutation.mutate({
+                        id: currentRec.recommendation_id,
+                        reason: rejectionReason.trim(),
+                      })}
+                      className="btn btn-danger whitespace-nowrap"
+                      disabled={rejectMutation.isPending || !rejectionReason.trim()}
+                    >
+                      {rejectMutation.isPending ? 'Recording...' : 'Confirm Rejection'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setIsRejecting(false)
+                        setRejectionReason('')
+                      }}
+                      className="btn btn-outline"
+                      disabled={rejectMutation.isPending}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
             </>
           ) : (
             <div className="bg-panel-bg/60 rounded-xl p-8 border border-panel-border/50 text-center text-text-muted">
@@ -715,8 +1094,11 @@ export default function CommandCenter() {
                     <td className="py-3 data-value text-[0.8125rem]">{log.recommendation?.recommended_value != null ? log.recommendation.recommended_value.toFixed(1) : '--'}</td>
                     <td className="py-3">
                       <span className={`inline-flex items-center gap-1 text-[0.625rem] font-medium px-2 py-0.5 rounded-full ${
-                        log.response === 'accept' ? 'bg-status-stable/10 text-status-stable border border-status-stable/20' : 
-                        'bg-status-critical/10 text-status-critical border border-status-critical/20'
+                        log.response === 'accept'
+                          ? 'bg-status-stable/10 text-status-stable border border-status-stable/20'
+                          : log.response === 'modify'
+                            ? 'bg-accent/10 text-accent border border-accent/20'
+                            : 'bg-status-critical/10 text-status-critical border border-status-critical/20'
                       }`}>
                         {log.response === 'accept' ? <CheckCircle className="w-2.5 h-2.5" /> : <AlertTriangle className="w-2.5 h-2.5" />}
                         {log.response === 'accept' ? 'Accepted' : log.response === 'reject' ? 'Rejected' : log.response === 'modify' ? 'Modified' : log.response}
@@ -757,7 +1139,9 @@ export default function CommandCenter() {
           </div>
           <span className="evidence-tag bg-accent/10 border-accent/20 text-accent">{correlations?.length ?? 0} Relationships</span>
         </div>
-        <InfluenceGraph correlations={correlations || []} />
+        <Suspense fallback={<div className="h-[380px] skeleton" />}>
+          <InfluenceGraph correlations={correlations || []} />
+        </Suspense>
       </motion.div>
     </motion.div>
   )

@@ -1,102 +1,183 @@
+"""Timestamp-safe lag and interaction discovery for process influence."""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+import numpy as np
 import pandas as pd
-from typing import List
+from scipy.stats import spearmanr
 from sqlalchemy.orm import Session
-from app.models.domain import TimeseriesPoint, DiscoveredRelationship
-from ml.feature_service import feature_service
+
+from app.models.domain import DiscoveredRelationship, TimeseriesPoint
+
 
 class CorrelationService:
-    def discover_relationships(self, event_id: str, db: Session):
-        pts = db.query(TimeseriesPoint).filter(TimeseriesPoint.event_id == event_id).order_by(TimeseriesPoint.timestamp.asc()).all()
-        if len(pts) < 20:
+    KNOWN_PARAMETERS = {
+        "stock": "Stock Flow",
+        "speed": "Machine Speed",
+        "filler": "Filler Flow",
+        "steam": "Steam Pressure",
+        "moisture": "Moisture",
+        "ash": "Ash",
+        "caliper": "Caliper",
+    }
+
+    def discover_relationships(
+        self,
+        event_id: str,
+        db: Session,
+        timestamp: datetime | None = None,
+    ):
+        query = db.query(TimeseriesPoint).filter(
+            TimeseriesPoint.event_id == event_id
+        )
+        if timestamp is not None:
+            query = query.filter(
+                TimeseriesPoint.timestamp <= timestamp.replace(tzinfo=None)
+            )
+        points = query.order_by(TimeseriesPoint.timestamp.asc()).all()
+        if len(points) < 30:
             return []
-            
-        # Convert to pandas for fast vectorized correlation
-        data = []
-        for p in pts:
-            data.append({
-                "timestamp": p.timestamp,
-                "bw": p.basis_weight_actual,
-                "stock": p.stock_flow_actual,
-                "filler": p.filler_flow_actual,
-                "steam": p.steam_pressure_actual,
-                "speed": p.machine_speed_actual
-            })
-        
-        df = pd.DataFrame(data)
-        
-        # Calculate lagged slopes to find the interaction
-        # We need slope of steam over 9 points (45s) and ramp of filler over 9 points
-        # But for simpler correlation discovery, we look at the interaction feature vs Basis Weight
-        
-        # 1. Discover basic correlations (0s lag)
-        corr_matrix = df[['bw', 'stock', 'speed', 'filler', 'steam']].corr(method='spearman')
-        
+
+        frame = pd.DataFrame(
+            {
+                "bw": [
+                    point.basis_weight_actual - point.basis_weight_setpoint
+                    for point in points
+                ],
+                "stock": [
+                    point.stock_flow_actual - point.stock_flow_setpoint
+                    for point in points
+                ],
+                "speed": [
+                    point.machine_speed_actual - point.machine_speed_setpoint
+                    for point in points
+                ],
+                "filler": [
+                    point.filler_flow_actual - point.filler_flow_setpoint
+                    for point in points
+                ],
+                "steam": [
+                    point.steam_pressure_actual
+                    - point.steam_pressure_setpoint
+                    for point in points
+                ],
+                "moisture": [
+                    point.moisture_actual - point.moisture_setpoint
+                    for point in points
+                ],
+                "ash": [
+                    point.ash_actual - point.ash_setpoint for point in points
+                ],
+                "caliper": [
+                    (point.caliper_actual or 0.0)
+                    - (point.caliper_setpoint or 0.0)
+                    for point in points
+                ],
+            }
+        )
+
         relationships = []
-        
-        # Basic Stock Flow vs BW
-        if abs(corr_matrix.loc['stock', 'bw']) > 0.25:
-            relationships.append(DiscoveredRelationship(
-                source_parameter="Stock Flow",
-                target_parameter="Basis Weight",
-                strength=float(corr_matrix.loc['stock', 'bw']),
-                lag_seconds=15, # Hardcoded known physics lag
-                is_interaction=False,
-                is_newly_discovered=False,
-                sample_note="Standard primary control relationship."
-            ))
-            
-        # Basic Speed vs BW
-        if abs(corr_matrix.loc['speed', 'bw']) > 0.25:
-            relationships.append(DiscoveredRelationship(
-                source_parameter="Machine Speed",
-                target_parameter="Basis Weight",
-                strength=float(corr_matrix.loc['speed', 'bw']),
-                lag_seconds=5,
-                is_interaction=False,
-                is_newly_discovered=False,
-                sample_note="Standard primary control relationship."
-            ))
-            
-        # 2. Discover the hidden 45s lagged interaction
-        # We slide a window and calculate the interaction feature from feature_service
-        interaction_vals = []
-        bw_future_vals = []
-        
-        for i in range(12, len(pts) - 10):
-            window = pts[i-12:i]
-            features = feature_service.extract_features(window)
-            interaction_vals.append(features["interaction_feature"])
-            
-            # Future basis weight deviation
-            future_bw_dev = pts[i+6].basis_weight_actual - pts[i+6].basis_weight_setpoint
-            bw_future_vals.append(future_bw_dev)
-            
-        # Correlate the interaction feature with future BW deviation
-        if len(interaction_vals) > 0:
-            df_int = pd.DataFrame({"interaction": interaction_vals, "future_bw": bw_future_vals})
-            int_corr = df_int['interaction'].corr(df_int['future_bw'])
-            
-            # Seeded interaction effect pushes BW in the same direction as the product,
-            # so the correlation must be positive (not just abs > 0.4)
-            if pd.notna(int_corr) and int_corr > 0.4:
-                relationships.append(DiscoveredRelationship(
-                    source_parameter="Filler Flow Ramp x Steam Pressure Slope",
+        for column, display in self.KNOWN_PARAMETERS.items():
+            strength, lag_points, p_value, support = self._best_lag(
+                frame[column], frame["bw"]
+            )
+            if abs(strength) >= 0.28 and p_value < 0.05:
+                relationships.append(
+                    DiscoveredRelationship(
+                        event_id=event_id,
+                        source_parameter=display,
+                        target_parameter="Basis Weight",
+                        strength=float(strength),
+                        lag_seconds=int(lag_points * 5),
+                        is_interaction=False,
+                        is_newly_discovered=False,
+                        sample_note=(
+                            f"Detrended lag relationship; n={support}, "
+                            f"p={p_value:.3f}."
+                        ),
+                    )
+                )
+
+        # Both inputs are already deviations from their moving setpoints, so
+        # their product is detrended while retaining a sustained compound
+        # effect that first differences would erase.
+        interaction = frame["filler"] * frame["steam"]
+        strength, lag_points, p_value, support = self._best_level_lag(
+            interaction, frame["bw"]
+        )
+        if abs(strength) >= 0.25 and p_value < 0.05:
+            relationships.append(
+                DiscoveredRelationship(
+                    event_id=event_id,
+                    source_parameter=(
+                        "Filler Flow Ramp × Steam Pressure Slope"
+                    ),
                     target_parameter="Basis Weight",
-                    strength=float(int_corr),
-                    lag_seconds=45,
+                    strength=float(strength),
+                    lag_seconds=int(lag_points * 5),
                     is_interaction=True,
                     is_newly_discovered=True,
-                    sample_note="Compound anomaly: Filler flow changes are amplifying steam pressure fluctuations after a 45s lag."
-                ))
-                
-        # Persist to DB
-        if relationships:
-            db.query(DiscoveredRelationship).filter(DiscoveredRelationship.event_id == event_id).delete()
-            for r in relationships:
-                r.event_id = event_id
+                    sample_note=(
+                        "Compound relationship not present in the standard "
+                        f"single-loop map; n={support}, p={p_value:.3f}."
+                    ),
+                )
+            )
+
+        relationships.sort(key=lambda item: abs(item.strength), reverse=True)
+        # Persist only a complete-event analysis. Playback analyses remain
+        # ephemeral and therefore cannot overwrite the event summary.
+        if timestamp is None:
+            db.query(DiscoveredRelationship).filter(
+                DiscoveredRelationship.event_id == event_id
+            ).delete()
             db.add_all(relationships)
             db.commit()
-            
         return relationships
+
+    @staticmethod
+    def _best_lag(source: pd.Series, target: pd.Series):
+        best = (0.0, 0, 1.0, 0)
+        source_delta = source.diff()
+        target_delta = target.diff()
+        for lag in range(0, 13):
+            aligned = pd.concat(
+                [source_delta, target_delta.shift(-lag)], axis=1
+            ).dropna()
+            if len(aligned) < 24 or aligned.iloc[:, 0].nunique() < 3:
+                continue
+            strength, p_value = spearmanr(
+                aligned.iloc[:, 0], aligned.iloc[:, 1]
+            )
+            if (
+                np.isfinite(strength)
+                and np.isfinite(p_value)
+                and abs(strength) > abs(best[0])
+            ):
+                best = (float(strength), lag, float(p_value), len(aligned))
+        return best
+
+    @staticmethod
+    def _best_level_lag(source: pd.Series, target: pd.Series):
+        best = (0.0, 0, 1.0, 0)
+        for lag in range(0, 13):
+            aligned = pd.concat(
+                [source, target.shift(-lag)], axis=1
+            ).dropna()
+            if len(aligned) < 24 or aligned.iloc[:, 0].nunique() < 3:
+                continue
+            strength, p_value = spearmanr(
+                aligned.iloc[:, 0], aligned.iloc[:, 1]
+            )
+            if (
+                np.isfinite(strength)
+                and np.isfinite(p_value)
+                and abs(strength) > abs(best[0])
+            ):
+                best = (float(strength), lag, float(p_value), len(aligned))
+        return best
+
 
 correlation_service = CorrelationService()

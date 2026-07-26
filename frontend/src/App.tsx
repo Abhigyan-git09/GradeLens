@@ -1,9 +1,13 @@
-import { Routes, Route } from 'react-router-dom'
+import { lazy, Suspense } from 'react'
+import { NavLink, Routes, Route } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { getHealth } from './api/client'
-import CommandCenter from './pages/CommandCenter'
-import { Activity, AlertTriangle, Radio } from 'lucide-react'
+import { Activity, AlertTriangle, Database, Radio, SlidersHorizontal } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
+
+const CommandCenter = lazy(() => import('./pages/CommandCenter'))
+const DataEvidence = lazy(() => import('./pages/DataEvidence'))
+const ScenarioLab = lazy(() => import('./pages/ScenarioLab'))
 
 function ModelModeIndicator({ mode }: { mode: string }) {
   const config = {
@@ -35,7 +39,7 @@ function App() {
     <div className="min-h-dvh bg-panel-bg text-text-primary flex flex-col">
       {/* ---- Top Navigation Bar ---- */}
       <header className="border-b border-panel-border/60 bg-panel-surface/60 backdrop-blur-xl sticky top-0 z-50">
-        <div className="max-w-[1920px] mx-auto px-5 md:px-8 h-14 flex items-center justify-between">
+        <div className="max-w-[1920px] mx-auto px-3 md:px-8 h-14 flex items-center justify-between gap-3">
           {/* Logo & Title */}
           <div className="flex items-center gap-3">
             <motion.div
@@ -55,8 +59,30 @@ function App() {
             </div>
           </div>
 
+          <nav className="flex items-center gap-1 rounded border border-panel-border/50 bg-panel-bg/40 p-1" aria-label="Primary">
+            {[
+              { to: '/', label: 'Command', icon: Activity, end: true },
+              { to: '/evidence', label: 'Evidence', icon: Database, end: false },
+              { to: '/scenario', label: 'Scenario Lab', icon: SlidersHorizontal, end: false },
+            ].map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.end}
+                className={({ isActive }) => `flex items-center gap-1.5 rounded px-2.5 py-1.5 text-[0.6875rem] font-medium transition-colors ${
+                  isActive
+                    ? 'bg-accent text-text-inverse'
+                    : 'text-text-muted hover:bg-panel-elevated hover:text-text-primary'
+                }`}
+              >
+                <item.icon className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">{item.label}</span>
+              </NavLink>
+            ))}
+          </nav>
+
           {/* Right Side Indicators */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 md:gap-3">
             <AnimatePresence mode="wait">
               {health ? (
                 <ModelModeIndicator key="mode" mode={health.model_mode} />
@@ -74,9 +100,9 @@ function App() {
               )}
             </AnimatePresence>
 
-            <div className="h-4 w-px bg-panel-border/50" />
+            <div className="hidden h-4 w-px bg-panel-border/50 md:block" />
 
-            <div className="flex items-center gap-1.5 text-xs text-text-muted">
+            <div className="hidden items-center gap-1.5 text-xs text-text-muted md:flex">
               <Radio className="w-3 h-3" />
               <span className="data-value font-medium">v{health?.version ?? '0.1.0'}</span>
             </div>
@@ -86,9 +112,13 @@ function App() {
 
       {/* ---- Main Content ---- */}
       <main className="flex-1 max-w-[1920px] mx-auto w-full">
-        <Routes>
-          <Route path="/" element={<CommandCenter />} />
-        </Routes>
+        <Suspense fallback={<div className="m-6 h-[65vh] panel skeleton" aria-label="Loading workspace" />}>
+          <Routes>
+            <Route path="/" element={<CommandCenter />} />
+            <Route path="/evidence" element={<DataEvidence />} />
+            <Route path="/scenario" element={<ScenarioLab />} />
+          </Routes>
+        </Suspense>
       </main>
 
       {/* ---- Advisory Disclaimer Footer ---- */}

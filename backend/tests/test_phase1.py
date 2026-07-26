@@ -54,25 +54,19 @@ def test_snapshot_leakage():
     assert snapshot_before is not None
     assert snapshot_before.risk is not None
     
-    # Store original data after T
-    future_pts = db.query(TimeseriesPoint).filter(
+    future_pt = db.query(TimeseriesPoint).filter(
         TimeseriesPoint.event_id == event.event_id,
         TimeseriesPoint.timestamp > T
-    ).all()
-    
-    # Delete future data
-    db.execute(text("DELETE FROM timeseries_points WHERE event_id = :ev AND timestamp > :t"), 
-               {"ev": event.event_id, "t": T})
-    db.commit()
+    ).order_by(TimeseriesPoint.timestamp.asc()).first()
+    assert future_pt is not None
+    original_future_value = future_pt.basis_weight_actual
+    future_pt.basis_weight_actual = original_future_value + 100.0
+    db.flush()
     
     # Generate snapshot again at T
     snapshot_after = get_snapshot(event.event_id, T, db)
     
-    # Restore future data
-    for pt in future_pts:
-        # Re-attach and merge to ensure clean restore
-        db.merge(pt)
-    db.commit()
+    db.rollback()
     db.close()
     
     # Assert identical JSON
@@ -125,15 +119,10 @@ def test_demo_event_exclusion():
     db.close()
 
 def test_bootstrap_idempotency():
-    import subprocess
+    from scripts.bootstrap import generate_synthetic_data
     db = SessionLocal()
     initial_count = db.query(GradeChangeEvent).count()
-    db.close()
-    
-    # Run bootstrap again
-    subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'scripts', 'bootstrap.py')], check=True)
-    
-    db = SessionLocal()
+    generate_synthetic_data(db, force_reset=False)
     final_count = db.query(GradeChangeEvent).count()
     db.close()
     

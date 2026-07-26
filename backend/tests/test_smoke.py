@@ -1,70 +1,119 @@
 import os
 import sys
 
-# Add backend dir to python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.database import SessionLocal, init_db
-from ml.risk_predictor import risk_predictor_service
-from ml.stabilization_service import stabilization_service
-from app.services.recommendation_engine import recommendation_engine
+from app.models.domain import GradeChangeEvent, TimeseriesPoint
 from app.services.correlation_service import correlation_service
+from app.services.counterfactual_service import counterfactual_service
 from app.services.rootcause_service import rootcause_service
+from ml.feature_service import feature_service
+from ml.risk_predictor import risk_predictor_service
+from ml.trajectory_forecast import trajectory_forecaster_service
 
-def test_risk_math():
-    print("Testing Risk Math (LightGBM)...")
-    # Synthetic feature vector
-    features = {
-        "bw_deviation": 1.2,
-        "bw_slope": 0.05,
-        "stock_flow_ramp": 2.0,
-        "interaction_feature": 1.5,
-        "current_bw": 65.2
-    }
-    res = risk_predictor_service.predict_risk(features)
-    assert "probability" in res, "Missing probability"
-    assert 0.0 <= res["probability"] <= 1.0, "Probability out of bounds"
-    print("[OK] Risk Predictor OK")
 
-def test_constraint_validation():
-    print("Testing Constraint Validation (Recommendation Engine)...")
-    db = SessionLocal()
-    # Try generating a recommendation for the demo event
-    rec = recommendation_engine.generate("EVT-003-RECOVERABLE", db)
-    
-    assert rec is not None, "Failed to generate recommendation"
-    if rec.parameter_name != "No intervention":
-        param_db_name = "stock_flow" if rec.parameter_name == "Stock Flow" else "machine_speed"
-        c = db.query(RecipeConstraint).filter(RecipeConstraint.grade_id == "G-200", RecipeConstraint.parameter == param_db_name).first()
-        if c:
-            assert c.min_val <= rec.recommended_value <= c.max_val, f"Recommendation {rec.recommended_value} violated recipe constraints for {param_db_name} [{c.min_val}, {c.max_val}]"
-    db.close()
-    print("[OK] Constraint Validation OK")
-    
-def test_correlation_discovery():
-    print("Testing Correlation Discovery...")
-    db = SessionLocal()
-    corrs = correlation_service.discover_relationships("EVT-003-RECOVERABLE", db)
-    assert len(corrs) > 0, "Expected correlations to be found"
-    assert any(c.source_parameter == "Filler x Steam Interaction" or c.is_interaction for c in corrs), "Failed to detect interaction feature anomaly"
-    db.close()
-    print("[OK] Correlation Discovery OK")
+def _recoverable_context(db):
+    event = (
+        db.query(GradeChangeEvent)
+        .filter_by(event_id="EVT-003-RECOVERABLE")
+        .one()
+    )
+    points = (
+        db.query(TimeseriesPoint)
+        .filter_by(event_id=event.event_id)
+        .order_by(TimeseriesPoint.timestamp)
+        .all()
+    )
+    ranked = []
+    for index in range(11, len(points)):
+        features = feature_service.extract_features(
+            points[index - 11 : index + 1]
+        )
+        risk = risk_predictor_service.predict_risk(features)["probability"]
+        ranked.append((risk, index, features))
+    _, index, features = max(
+        ranked, key=lambda item: (item[0], item[1])
+    )
+    return event, points, index, features
 
-def test_root_cause():
-    print("Testing Root Cause Engine...")
+
+def test_early_warning_before_spec_violation():
     db = SessionLocal()
-    causes = rootcause_service.get_root_causes("EVT-003-RECOVERABLE", db)
-    if causes:
-        # Ensure percentages sum close to 1.0
-        total = sum(c.contribution_pct for c in causes)
-        assert 0.95 <= total <= 1.05, "Contributions do not sum to ~100%"
+    _, _, _, features = _recoverable_context(db)
+    result = risk_predictor_service.predict_risk(features)
+    assert result["probability"] >= 0.75
+    assert abs(features["bw_deviation_pct"]) < 2.5
     db.close()
-    print("[OK] Root Cause Engine OK")
+
+
+def test_trajectory_tracks_moving_grade_setpoint():
+    db = SessionLocal()
+    _, _, _, features = _recoverable_context(db)
+    trajectory = trajectory_forecaster_service.forecast(features)
+    assert len(trajectory["horizons"]) == 3
+    assert all("predicted_setpoint" in item for item in trajectory["horizons"])
+    assert trajectory["model_mode"] == "trained"
+    db.close()
+
+
+def test_constrained_counterfactual_materially_improves_risk():
+    db = SessionLocal()
+    event, points, index, _ = _recoverable_context(db)
+    latest = points[index]
+    simulations = []
+    for parameter, value in counterfactual_service.candidate_values(
+        event, latest, db
+    ):
+        result = counterfactual_service.simulate(
+            event.event_id, latest.timestamp, parameter, value, db
+        )
+        if result and result["feasible"]:
+            simulations.append(result)
+    assert len(simulations) >= 8
+    exposure_reducing = [
+        item for item in simulations if item["avoided_off_spec_seconds"] > 0
+    ]
+    assert exposure_reducing
+    best = min(exposure_reducing, key=lambda item: item["risk_after"])
+    assert best["risk_after"] <= best["risk_before"] - 0.10
+    assert best["stabilization_after"] < best["stabilization_before"]
+    assert best["avoided_off_spec_seconds"] > 0
+    assert len(best["evidence_tags"]) >= 4
+    db.close()
+
+
+def test_timestamp_safe_interaction_discovery():
+    db = SessionLocal()
+    event, points, _, _ = _recoverable_context(db)
+    early = correlation_service.discover_relationships(
+        event.event_id, db, timestamp=points[20].timestamp
+    )
+    complete = correlation_service.discover_relationships(
+        event.event_id, db, timestamp=points[-1].timestamp
+    )
+    assert early == []
+    assert any(item.is_interaction for item in complete)
+    db.close()
+
+
+def test_local_root_cause_explanation():
+    db = SessionLocal()
+    event, points, index, features = _recoverable_context(db)
+    causes = rootcause_service.get_root_causes(
+        event.event_id, db, features=features
+    )
+    assert causes
+    assert 0.95 <= sum(item.contribution_pct for item in causes) <= 1.05
+    assert all("local SHAP" in item.rationale for item in causes)
+    db.close()
+
 
 if __name__ == "__main__":
     init_db()
-    test_risk_math()
-    test_constraint_validation()
-    test_correlation_discovery()
-    test_root_cause()
-    print("All smoke tests passed successfully!")
+    test_early_warning_before_spec_violation()
+    test_trajectory_tracks_moving_grade_setpoint()
+    test_constrained_counterfactual_materially_improves_risk()
+    test_timestamp_safe_interaction_discovery()
+    test_local_root_cause_explanation()
+    print("All GradeLens smoke checks passed.")
