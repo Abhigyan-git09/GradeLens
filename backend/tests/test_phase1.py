@@ -107,6 +107,14 @@ def test_no_action_baseline():
         assert rec.parameter_name == "No intervention"
         assert "Continue monitoring." in rec.rationale
         assert 0.50 <= rec.confidence <= 0.95
+        assert len(rec.evidence_tags) >= 5
+        assert {
+            "Risk Forecast",
+            "Specification Margin",
+            "Scanner Diagnostics",
+            "Historical Stability",
+            "Recipe Envelope",
+        }.issubset({tag.tag for tag in rec.evidence_tags})
     finally:
         if rec is not None:
             db.query(EvidenceTag).filter(

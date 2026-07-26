@@ -48,6 +48,8 @@ export interface RiskPrediction {
   time_to_violation_seconds: number | null;
   model_mode: 'trained' | 'degraded' | 'demo' | 'hybrid';
   risk_level: 'low' | 'moderate' | 'high' | 'critical';
+  decision_threshold: number;
+  spec_deviation_pct: number;
 }
 
 // ---- Trajectory Prediction ----

@@ -413,6 +413,39 @@ export default function CommandCenter() {
     : isCurrentlyOffSpec
       ? 'Limit exceeded'
       : 'Not imminent'
+  const specDeviationPct = riskData?.spec_deviation_pct ?? 2.5
+  const decisionThreshold = riskData?.decision_threshold ?? 0.6
+  const currentDeviationPct = currentPoint && currentPoint.basis_weight_setpoint
+    ? Math.abs(
+      currentPoint.basis_weight_actual - currentPoint.basis_weight_setpoint,
+    ) / Math.abs(currentPoint.basis_weight_setpoint) * 100
+    : 0
+  const specificationMarginPct = specDeviationPct - currentDeviationPct
+  const lowerSpecificationLimit = currentPoint
+    ? currentPoint.basis_weight_setpoint * (1 - specDeviationPct / 100)
+    : 0
+  const upperSpecificationLimit = currentPoint
+    ? currentPoint.basis_weight_setpoint * (1 + specDeviationPct / 100)
+    : 0
+  const noActionIsSafe = !hasCorrectiveAction
+    && !isCurrentlyOffSpec
+    && riskBefore < decisionThreshold
+  const forecastEnvelope = (trajectoryData?.horizons ?? []).map((horizon) => {
+    const deviationPct = Math.abs(
+      horizon.predicted_bw - horizon.predicted_setpoint,
+    ) / Math.max(Math.abs(horizon.predicted_setpoint), 1e-6) * 100
+    return {
+      ...horizon,
+      deviationPct,
+      withinSpecification: deviationPct <= specDeviationPct,
+    }
+  })
+  const peakForecastDeviationPct = forecastEnvelope.length > 0
+    ? Math.max(...forecastEnvelope.map((horizon) => horizon.deviationPct))
+    : currentDeviationPct
+  const forecastStaysInsideSpecification = forecastEnvelope.every(
+    (horizon) => horizon.withinSpecification,
+  )
 
   return (
     <motion.div
@@ -872,10 +905,14 @@ export default function CommandCenter() {
                   <div>
                     <p className="text-sm font-semibold">
                       {!hasCorrectiveAction
-                        ? 'Continue Monitoring'
+                        ? noActionIsSafe
+                          ? 'Operating Envelope Stable'
+                          : 'Hold Setpoints — Operator Review'
                         : `${simulatedValue !== null && simulatedValue.value < currentRec.current_value ? 'Reduce' : 'Increase'} ${currentRec.parameter_name} Setpoint`}
                     </p>
-                    <p className="text-[0.6875rem] text-text-muted">{currentRec.rationale}</p>
+                    <p className="mt-0.5 text-[0.6875rem] leading-5 text-text-muted">
+                      {currentRec.rationale}
+                    </p>
                     {simulation && simulation.avoided_off_spec_seconds >= 10 && (
                       <p className="text-[0.625rem] text-status-stable mt-1.5 font-medium bg-status-stable/10 border border-status-stable/20 px-2 py-0.5 rounded inline-block shadow-sm">
                         <TrendingDown className="w-2.5 h-2.5 inline mr-1" />
@@ -890,6 +927,170 @@ export default function CommandCenter() {
                     )}
                   </div>
                 </div>
+
+                {!hasCorrectiveAction && (
+                  <>
+                    <div className="mt-5 grid gap-3 md:grid-cols-2">
+                      <div className="rounded-lg border border-status-stable/15 bg-status-stable/[0.04] p-4">
+                        <div className="mb-3 flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Target className="h-3.5 w-3.5 text-status-stable" />
+                            <span className="text-[0.625rem] font-semibold uppercase tracking-wider text-text-muted">
+                              Basis Weight Safety Margin
+                            </span>
+                          </div>
+                          <span className={`data-value text-xs font-semibold ${
+                            specificationMarginPct >= 0
+                              ? 'text-status-stable'
+                              : 'text-status-critical'
+                          }`}>
+                            {specificationMarginPct >= 0 ? '+' : ''}
+                            {specificationMarginPct.toFixed(2)} pp
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <p className="text-[0.625rem] text-text-muted">Current deviation</p>
+                            <p className="mt-1 data-value text-base font-semibold">
+                              {currentDeviationPct.toFixed(2)}%
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-[0.625rem] text-text-muted">Configured limit</p>
+                            <p className="mt-1 data-value text-base font-semibold">
+                              ±{specDeviationPct.toFixed(1)}%
+                            </p>
+                          </div>
+                        </div>
+                        <div className="mt-3 border-t border-panel-border/40 pt-3">
+                          <p className="text-[0.625rem] text-text-muted">Permitted basis-weight band</p>
+                          <p className="mt-1 data-value text-xs text-text-secondary">
+                            {lowerSpecificationLimit.toFixed(2)}–{upperSpecificationLimit.toFixed(2)} g/m²
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="rounded-lg border border-accent/15 bg-accent/[0.035] p-4">
+                        <div className="mb-3 flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Gauge className="h-3.5 w-3.5 text-accent" />
+                            <span className="text-[0.625rem] font-semibold uppercase tracking-wider text-text-muted">
+                              Intervention Trigger
+                            </span>
+                          </div>
+                          <span className="data-value text-xs font-semibold text-accent">
+                            {Math.round(riskBefore * 100)}% / {Math.round(decisionThreshold * 100)}%
+                          </span>
+                        </div>
+                        <div
+                          className="h-2 overflow-hidden rounded-full bg-panel-surface"
+                          role="progressbar"
+                          aria-label="Risk relative to intervention threshold"
+                          aria-valuemin={0}
+                          aria-valuemax={Math.round(decisionThreshold * 100)}
+                          aria-valuenow={Math.round(riskBefore * 100)}
+                        >
+                          <div
+                            className={`h-full rounded-full ${
+                              riskBefore >= decisionThreshold
+                                ? 'bg-status-critical'
+                                : 'bg-status-stable'
+                            }`}
+                            style={{
+                              width: `${Math.min(
+                                100,
+                                riskBefore / Math.max(decisionThreshold, 0.01) * 100,
+                              )}%`,
+                            }}
+                          />
+                        </div>
+                        <p className="mt-3 text-[0.6875rem] leading-5 text-text-secondary">
+                          Escalate when 120-second risk reaches{' '}
+                          <span className="data-value font-semibold text-text-primary">
+                            {Math.round(decisionThreshold * 100)}%
+                          </span>{' '}
+                          or projected deviation reaches{' '}
+                          <span className="data-value font-semibold text-text-primary">
+                            ±{specDeviationPct.toFixed(1)}%
+                          </span>.
+                        </p>
+                        <div className="mt-3 flex items-center justify-between border-t border-panel-border/40 pt-3 text-[0.625rem]">
+                          <span className="text-text-muted">Scanner quality</span>
+                          <span className="data-value text-text-secondary">
+                            {Math.round((currentPoint?.scanner_quality_score ?? 0) * 100)}%
+                            {' · '}
+                            {currentPoint?.active_alarm_count ?? 0} active alarm(s)
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 rounded-lg border border-panel-border/50 bg-panel-surface/25 p-4">
+                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="text-[0.625rem] font-semibold uppercase tracking-wider text-text-muted">
+                            Forward Safety Check
+                          </p>
+                          <p className="mt-1 text-[0.6875rem] text-text-secondary">
+                            Learned trajectory forecast compared with the active basis-weight specification.
+                          </p>
+                        </div>
+                        <span className={`rounded-full border px-2 py-1 text-[0.625rem] font-medium ${
+                          forecastStaysInsideSpecification
+                            ? 'border-status-stable/20 bg-status-stable/10 text-status-stable'
+                            : 'border-status-critical/20 bg-status-critical/10 text-status-critical'
+                        }`}>
+                          Peak projected deviation {peakForecastDeviationPct.toFixed(2)}%
+                        </span>
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-3">
+                        {forecastEnvelope.map((horizon) => (
+                          <div
+                            key={horizon.seconds}
+                            className="rounded-md border border-panel-border/40 bg-panel-bg/50 px-3 py-2.5"
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="data-value text-xs font-semibold">
+                                +{horizon.seconds}s
+                              </span>
+                              <span className={`text-[0.625rem] font-medium ${
+                                horizon.withinSpecification
+                                  ? 'text-status-stable'
+                                  : 'text-status-critical'
+                              }`}>
+                                {horizon.withinSpecification ? 'Within limit' : 'Limit risk'}
+                              </span>
+                            </div>
+                            <p className="mt-2 data-value text-sm">
+                              {horizon.predicted_bw.toFixed(2)} g/m²
+                            </p>
+                            <p className="mt-1 text-[0.625rem] text-text-muted">
+                              {horizon.deviationPct.toFixed(2)}% from projected setpoint
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className={`mt-3 flex items-start gap-2 rounded-lg border px-3 py-2.5 ${
+                      noActionIsSafe
+                        ? 'border-status-stable/15 bg-status-stable/[0.035]'
+                        : 'border-status-warning/20 bg-status-warning/[0.04]'
+                    }`}>
+                      <ShieldCheck className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${
+                        noActionIsSafe ? 'text-status-stable' : 'text-status-warning'
+                      }`} />
+                      <p className="text-[0.6875rem] leading-5 text-text-secondary">
+                        <span className="font-semibold text-text-primary">
+                          Monitoring plan:
+                        </span>{' '}
+                        Hold current setpoints and re-evaluate on every new scanner sample.
+                        Escalate immediately if the risk trigger, specification limit, scanner-quality,
+                        or alarm guardrail changes.
+                      </p>
+                    </div>
+                  </>
+                )}
 
                 {hasCorrectiveAction && <div className="grid grid-cols-3 gap-3 mb-4">
                   <div className="bg-panel-surface/50 rounded-lg p-3 text-center">
@@ -970,7 +1171,7 @@ export default function CommandCenter() {
                 </div>}
 
                 {/* Before / After Metrics */}
-                <div className={`grid ${simulation ? 'grid-cols-3' : 'grid-cols-2'} gap-3`}>
+                {hasCorrectiveAction && <div className={`grid ${simulation ? 'grid-cols-3' : 'grid-cols-2'} gap-3`}>
                   <div className="flex items-center justify-between bg-panel-surface/30 rounded-lg px-3 py-2">
                     <span className="text-[0.6875rem] text-text-muted">Horizon Risk</span>
                     <div className="flex items-center gap-2">
@@ -997,17 +1198,58 @@ export default function CommandCenter() {
                       </div>
                     </div>
                   )}
-                </div>
+                </div>}
               </div>
 
               {/* Evidence Tags */}
               <div className="mb-5">
-                <p className="text-[0.625rem] text-text-muted uppercase tracking-wider font-medium mb-2">Evidence Sources</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {evidenceTags.map((tag) => (
-                    <span key={tag.tag} className="evidence-tag" title={`${tag.source}: ${tag.detail}`}>{tag.tag}</span>
-                  ))}
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <p className="text-[0.625rem] font-medium uppercase tracking-wider text-text-muted">
+                    Evidence Sources
+                  </p>
+                  {!hasCorrectiveAction && (
+                    <span className="text-[0.625rem] text-text-muted">
+                      Every conclusion is traceable to its inference source
+                    </span>
+                  )}
                 </div>
+                {!hasCorrectiveAction ? (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {evidenceTags.map((tag) => (
+                      <div
+                        key={`${tag.tag}-${tag.source}`}
+                        className="rounded-lg border border-panel-border/50 bg-panel-bg/40 p-3"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <span className="evidence-tag !px-1.5 !py-0.5 !text-[0.625rem]">
+                            {tag.tag}
+                          </span>
+                          <span className="text-right text-[0.6rem] uppercase tracking-wide text-text-muted">
+                            Source of inference
+                          </span>
+                        </div>
+                        <p className="mt-2 text-[0.6875rem] font-medium leading-5 text-text-secondary">
+                          {tag.source}
+                        </p>
+                        <p className="mt-1 text-[0.625rem] leading-5 text-text-muted">
+                          {tag.detail}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {evidenceTags.map((tag) => (
+                      <span
+                        key={tag.tag}
+                        className="evidence-tag"
+                        title={`${tag.source}: ${tag.detail}`}
+                      >
+                        {tag.tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Action Buttons */}
@@ -1017,14 +1259,20 @@ export default function CommandCenter() {
                   className="btn btn-primary flex-1"
                   disabled={acceptMutation.isPending}
                 >
-                  {acceptMutation.isPending ? 'Accepting...' : 'Accept Recommendation'}
+                  {acceptMutation.isPending
+                    ? hasCorrectiveAction ? 'Accepting...' : 'Recording...'
+                    : hasCorrectiveAction
+                      ? 'Accept Recommendation'
+                      : noActionIsSafe
+                        ? 'Acknowledge & Monitor'
+                        : 'Acknowledge Setpoint Hold'}
                 </button>
                 <button 
                   onClick={() => setIsRejecting(true)}
                   className="btn btn-danger"
                   disabled={rejectMutation.isPending}
                 >
-                  Reject
+                  {hasCorrectiveAction ? 'Reject' : 'Flag for Review'}
                 </button>
                 {hasCorrectiveAction && (
                   <button
@@ -1042,14 +1290,18 @@ export default function CommandCenter() {
                     htmlFor="rejection-reason"
                     className="block text-[0.6875rem] font-medium text-text-secondary mb-2"
                   >
-                    Rejection reason
+                    {hasCorrectiveAction
+                      ? 'Rejection reason'
+                      : 'Why should this state be reviewed?'}
                   </label>
                   <div className="flex items-center gap-2">
                     <input
                       id="rejection-reason"
                       type="text"
                       value={rejectionReason}
-                      placeholder="Record why this action is not appropriate"
+                      placeholder={hasCorrectiveAction
+                        ? 'Record why this action is not appropriate'
+                        : 'Record the operator concern or conflicting field observation'}
                       onChange={(event) => setRejectionReason(event.target.value)}
                       className="flex-1 rounded border border-panel-border bg-panel-bg px-3 py-2 text-xs text-text-primary outline-none focus:border-status-critical"
                     />
@@ -1061,7 +1313,11 @@ export default function CommandCenter() {
                       className="btn btn-danger whitespace-nowrap"
                       disabled={rejectMutation.isPending || !rejectionReason.trim()}
                     >
-                      {rejectMutation.isPending ? 'Recording...' : 'Confirm Rejection'}
+                      {rejectMutation.isPending
+                        ? 'Recording...'
+                        : hasCorrectiveAction
+                          ? 'Confirm Rejection'
+                          : 'Record Review Request'}
                     </button>
                     <button
                       onClick={() => {
@@ -1103,26 +1359,53 @@ export default function CommandCenter() {
             </thead>
             <tbody>
               {auditLog && auditLog.length > 0 ? (
-                auditLog.map((log: any) => (
-                  <tr key={log.feedback_id} className="border-b border-panel-border/30">
-                    <td className="py-3 data-value text-[0.6875rem]">{new Date(log.timestamp).toLocaleTimeString()}</td>
-                    <td className="py-3 text-[0.8125rem] font-medium">{log.recommendation?.parameter_name || 'N/A'}</td>
-                    <td className="py-3 data-value text-[0.8125rem]">{log.recommendation?.recommended_value != null ? log.recommendation.recommended_value.toFixed(1) : '--'}</td>
-                    <td className="py-3">
-                      <span className={`inline-flex items-center gap-1 text-[0.625rem] font-medium px-2 py-0.5 rounded-full ${
-                        log.response === 'accept'
-                          ? 'bg-status-stable/10 text-status-stable border border-status-stable/20'
-                          : log.response === 'modify'
-                            ? 'bg-accent/10 text-accent border border-accent/20'
-                            : 'bg-status-critical/10 text-status-critical border border-status-critical/20'
-                      }`}>
-                        {log.response === 'accept' ? <CheckCircle className="w-2.5 h-2.5" /> : <AlertTriangle className="w-2.5 h-2.5" />}
-                        {log.response === 'accept' ? 'Accepted' : log.response === 'reject' ? 'Rejected' : log.response === 'modify' ? 'Modified' : log.response}
-                      </span>
-                    </td>
-                    <td className="py-3 text-[0.6875rem] text-text-muted">Operator</td>
-                  </tr>
-                ))
+                auditLog.map((log: any) => {
+                  const isNoActionDecision = log.recommendation?.parameter_name === 'No intervention'
+                  const responseLabel = isNoActionDecision
+                    ? log.response === 'accept'
+                      ? 'Monitoring acknowledged'
+                      : log.response === 'reject'
+                        ? 'Review requested'
+                        : 'Operator updated'
+                    : log.response === 'accept'
+                      ? 'Accepted'
+                      : log.response === 'reject'
+                        ? 'Rejected'
+                        : log.response === 'modify'
+                          ? 'Modified'
+                          : log.response
+
+                  return (
+                    <tr key={log.feedback_id} className="border-b border-panel-border/30">
+                      <td className="py-3 data-value text-[0.6875rem]">{new Date(log.timestamp).toLocaleTimeString()}</td>
+                      <td className="py-3 text-[0.8125rem] font-medium">
+                        {isNoActionDecision
+                          ? 'Continue monitoring'
+                          : log.recommendation?.parameter_name || 'N/A'}
+                      </td>
+                      <td className="py-3 data-value text-[0.8125rem]">
+                        {isNoActionDecision
+                          ? '—'
+                          : log.recommendation?.recommended_value != null
+                            ? log.recommendation.recommended_value.toFixed(1)
+                            : '--'}
+                      </td>
+                      <td className="py-3">
+                        <span className={`inline-flex items-center gap-1 text-[0.625rem] font-medium px-2 py-0.5 rounded-full ${
+                          log.response === 'accept'
+                            ? 'bg-status-stable/10 text-status-stable border border-status-stable/20'
+                            : log.response === 'modify'
+                              ? 'bg-accent/10 text-accent border border-accent/20'
+                              : 'bg-status-critical/10 text-status-critical border border-status-critical/20'
+                        }`}>
+                          {log.response === 'accept' ? <CheckCircle className="w-2.5 h-2.5" /> : <AlertTriangle className="w-2.5 h-2.5" />}
+                          {responseLabel}
+                        </span>
+                      </td>
+                      <td className="py-3 text-[0.6875rem] text-text-muted">Operator</td>
+                    </tr>
+                  )
+                })
               ) : (
                 <tr>
                   <td colSpan={5} className="py-10 text-center">

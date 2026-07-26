@@ -92,6 +92,8 @@ class RiskPredictionSchema(BaseModel):
     time_to_violation_seconds: Optional[float]
     model_mode: str
     risk_level: str
+    decision_threshold: float
+    spec_deviation_pct: float
 
 class TrajectoryHorizonSchema(BaseModel):
     seconds: float

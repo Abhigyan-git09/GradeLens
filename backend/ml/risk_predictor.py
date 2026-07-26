@@ -57,7 +57,9 @@ class RiskPredictor:
                 "direction": direction,
                 "time_to_violation_seconds": self._time_to_limit(features),
                 "risk_level": "critical" if prob > 0.75 else "high" if prob > 0.5 else "moderate" if prob > 0.25 else "low",
-                "model_mode": "degraded"
+                "model_mode": "degraded",
+                "decision_threshold": self.decision_threshold,
+                "spec_deviation_pct": settings.SPEC_DEVIATION_PCT,
             }
 
         prob = float(self.model.predict_proba(X)[0][1])
@@ -79,7 +81,9 @@ class RiskPredictor:
             "direction": direction,
             "time_to_violation_seconds": time_to_violation,
             "risk_level": risk_level,
-            "model_mode": "trained"
+            "model_mode": "trained",
+            "decision_threshold": self.decision_threshold,
+            "spec_deviation_pct": settings.SPEC_DEVIATION_PCT,
         }
 
     @staticmethod

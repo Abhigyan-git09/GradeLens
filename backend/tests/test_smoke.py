@@ -44,6 +44,10 @@ def test_early_warning_before_spec_violation():
     result = risk_predictor_service.predict_risk(features)
     assert result["probability"] >= 0.75
     assert abs(features["bw_deviation_pct"]) < 2.5
+    assert result["decision_threshold"] == (
+        risk_predictor_service.decision_threshold
+    )
+    assert result["spec_deviation_pct"] == 2.5
     db.close()
 
 

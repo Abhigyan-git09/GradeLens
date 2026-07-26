@@ -13,6 +13,7 @@ from app.config import settings
 from app.models.domain import (
     EvidenceTag,
     GradeChangeEvent,
+    RecipeConstraint,
     Recommendation,
     TimeseriesPoint,
 )
@@ -74,13 +75,16 @@ class RecommendationEngine:
 
         if current_risk < risk_predictor_service.decision_threshold:
             return self._create_no_action_recommendation(
-                event_id,
+                event,
                 db,
                 current_risk,
                 current_stabilization,
                 decision_time,
                 "Current forecast remains within the operating envelope.",
                 no_action_confidence,
+                latest,
+                risk_predictor_service.decision_threshold,
+                current_risk_result["model_mode"],
             )
 
         scored = []
@@ -110,26 +114,32 @@ class RecommendationEngine:
 
         if not scored:
             return self._create_no_action_recommendation(
-                event_id,
+                event,
                 db,
                 current_risk,
                 current_stabilization,
                 decision_time,
                 "No candidate satisfies the active recipe and actuator limits.",
                 no_action_confidence,
+                latest,
+                risk_predictor_service.decision_threshold,
+                current_risk_result["model_mode"],
             )
 
         scored.sort(key=lambda item: (item[0], item[1]))
         best = scored[0][2]
         if not self._is_material_improvement(best):
             return self._create_no_action_recommendation(
-                event_id,
+                event,
                 db,
                 current_risk,
                 current_stabilization,
                 decision_time,
                 "Constrained candidates do not provide a material improvement.",
                 no_action_confidence,
+                latest,
+                risk_predictor_service.decision_threshold,
+                current_risk_result["model_mode"],
             )
 
         delta = best["proposed_value"] - best["current_value"]
@@ -256,17 +266,25 @@ class RecommendationEngine:
 
     @staticmethod
     def _create_no_action_recommendation(
-        event_id,
+        event,
         db,
         current_risk,
         current_stabilization,
         timestamp=None,
         reason="No corrective action is currently recommended.",
         confidence=0.50,
+        latest=None,
+        decision_threshold=0.60,
+        model_mode="degraded",
     ):
+        operator_response = (
+            "Continue monitoring."
+            if current_risk < decision_threshold
+            else "Hold current setpoints and request operator review."
+        )
         rec = Recommendation(
             recommendation_id=str(uuid.uuid4()),
-            event_id=event_id,
+            event_id=event.event_id,
             timestamp=timestamp
             or datetime.now(UTC).replace(tzinfo=None),
             parameter_name="No intervention",
@@ -278,18 +296,109 @@ class RecommendationEngine:
             stabilization_before=current_stabilization,
             stabilization_after=current_stabilization,
             confidence=confidence,
-            rationale=f"{reason} Continue monitoring.",
+            rationale=f"{reason} {operator_response}",
             status="pending",
         )
         db.add(rec)
         db.flush()
-        db.add(
-            EvidenceTag(
-                recommendation_id=rec.recommendation_id,
-                tag="Safe Envelope",
-                source="Risk forecast and active recipe constraints",
-                detail=reason,
+
+        evidence = [
+            {
+                "tag": "Risk Forecast",
+                "source": (
+                    f"{model_mode.title()} 120-second basis-weight risk model"
+                ),
+                "detail": (
+                    f"Forecast risk is {current_risk * 100:.1f}% versus the "
+                    f"{decision_threshold * 100:.1f}% intervention threshold."
+                ),
+            },
+            {
+                "tag": "Historical Stability",
+                "source": (
+                    "Chronologically validated historical-transition model"
+                ),
+                "detail": (
+                    f"Estimated stabilization remaining is "
+                    f"{current_stabilization:.0f} seconds."
+                ),
+            },
+        ]
+
+        if latest is not None:
+            setpoint = abs(float(latest.basis_weight_setpoint))
+            deviation_pct = (
+                abs(
+                    float(latest.basis_weight_actual)
+                    - float(latest.basis_weight_setpoint)
+                )
+                / setpoint
+                * 100.0
+                if setpoint > 1e-6
+                else 0.0
             )
+            spec_margin = settings.SPEC_DEVIATION_PCT - deviation_pct
+            margin_detail = (
+                f"Current deviation is {deviation_pct:.2f}%; "
+                f"{spec_margin:.2f} percentage points remain before the "
+                f"±{settings.SPEC_DEVIATION_PCT:.1f}% limit."
+                if spec_margin >= 0
+                else (
+                    f"Current deviation is {deviation_pct:.2f}%, exceeding "
+                    f"the ±{settings.SPEC_DEVIATION_PCT:.1f}% limit by "
+                    f"{abs(spec_margin):.2f} percentage points."
+                )
+            )
+            evidence.extend(
+                [
+                    {
+                        "tag": "Specification Margin",
+                        "source": (
+                            "Current QCS basis-weight measurement and "
+                            "configured specification limit"
+                        ),
+                        "detail": margin_detail,
+                    },
+                    {
+                        "tag": "Scanner Diagnostics",
+                        "source": (
+                            "QCS scanner quality and active alarm history"
+                        ),
+                        "detail": (
+                            f"Scanner quality is "
+                            f"{float(latest.scanner_quality_score) * 100:.0f}% "
+                            f"with {int(latest.active_alarm_count)} active "
+                            f"alarm(s)."
+                        ),
+                    },
+                ]
+            )
+
+        constraint_count = (
+            db.query(RecipeConstraint)
+            .filter(RecipeConstraint.grade_id == event.target_grade)
+            .count()
+        )
+        evidence.append(
+            {
+                "tag": "Recipe Envelope",
+                "source": (
+                    f"Target-grade recipe {event.recipe_id}"
+                ),
+                "detail": (
+                    f"{constraint_count} active parameter constraint(s) are "
+                    f"registered for grade {event.target_grade}. {reason}"
+                ),
+            }
+        )
+        db.add_all(
+            [
+                EvidenceTag(
+                    recommendation_id=rec.recommendation_id,
+                    **tag,
+                )
+                for tag in evidence
+            ]
         )
         db.commit()
         db.refresh(rec)
