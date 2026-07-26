@@ -6,84 +6,68 @@
 
 ![Command Center](docs/main_dashboard.png)
 
-GradeLens is a sophisticated, AI-driven advisory layer designed to predict and prevent out-of-spec basis weight incidents during automatic grade transitions in paper manufacturing. Built with a strict focus on **safety**, **explainability**, and **actionability**, GradeLens operates entirely in an advisory capacity, putting critical insights directly in front of the operator before physical changes are made.
+GradeLens is a sophisticated, AI-driven advisory layer designed to predict and prevent out-of-spec basis weight incidents during automatic grade transitions in paper manufacturing. Built with a strict focus on safety, explainability, and actionability, GradeLens operates entirely in an advisory capacity, putting critical insights directly in front of the operator before physical changes are made.
 
 ---
 
-## 🏭 Features
+## Technical Stack
 
-- **Trajectory Forecasting**: Anticipates basis weight drift 30, 60, and 120 seconds into the future.
-- **Fail-Closed Recommendation Engine**: Suggests optimal setpoint adjustments to prevent spec deviations. Crucially, the engine refuses to recommend changes for parameters that lack pre-defined safety bounds in the `RecipeConstraint` table.
-- **Scenario Lab**: Operators can construct bounded setpoint scenarios and run what-if analyses to simulate the ramp rate and stabilization times of proposed adjustments.
-- **Dynamic Evidence & Explainability**: Recommendations are backed by dynamic evidence tags, calculating live confidence intervals and projected business impact (e.g., "$4,500/hr saved").
-- **Influence Graph Correlation**: Automatically discovers and maps linear and compound (lagged) relationships between machine actuators and paper quality.
+The application is built on a modern, decoupled architecture designed for high-performance data visualization and machine learning inference.
 
-### 🧪 Scenario Lab
-The interactive Scenario Lab allows operators to experiment with grade change targets safely.
+**Frontend:**
+- **React 18 & TypeScript**: Component-driven UI development.
+- **Vite**: Ultra-fast module bundler and development server.
+- **TanStack Query**: Robust data fetching, caching, and state management for simulated live data streams.
+- **Recharts & React Flow**: Complex, interactive data visualizations for timeseries forecasting and node-based influence mapping.
+
+**Backend:**
+- **FastAPI**: Asynchronous Python web framework for handling RESTful API routing and data serving.
+- **Scikit-Learn**: Machine learning pipeline utilizing Random Forest Classifiers and K-Nearest Neighbors for predictive modeling.
+- **SQLAlchemy & SQLite**: ORM and local database engine for persisting synthetic event data, constraints, and operator feedback.
+- **Docker**: Containerization using multi-stage Dockerfiles for both frontend (Nginx) and backend services.
+
+---
+
+## Core Features & Mechanics
+
+GradeLens separates its capabilities into distinct modules that give operators a complete view of historical trends, predictive risk, and system constraints.
+
+### 1. Command Center & Trajectory Forecasting
+The primary dashboard serves as the live monitoring hub. The ML layer ingests historical basis weight, steam pressure, and stock flow metrics to project trajectory forecasts 30, 60, and 120 seconds into the future. It actively flags potential specification deviations before they occur.
+
+### 2. Parameter Influence Map
+Instead of a standard correlation matrix, GradeLens utilizes a node-based graph to visually map relationships between actuators and paper quality. The engine automatically discovers and highlights both linear correlations and complex, lagged compound interactions (e.g., filler-flow ramp interacting with steam-pressure slope at a 45-second delay).
+
+![Influence Graph](docs/influence_graph.png)
+
+### 3. Scenario Lab
+The Scenario Lab provides a sandbox environment for operators. Before accepting a system-generated recommendation, operators can construct their own bounded setpoint scenarios and run what-if analyses to simulate how the machine will respond, specifically predicting the ramp rate and required stabilization times.
+
 ![Scenario Lab](docs/scenario_lab.png)
 
-### 📊 Explainability & Evidence
-GradeLens is completely transparent about its model pipeline, data splits, and causal processing flows.
+### 4. Dynamic Evidence & Explainability
+Machine learning models are heavily scrutinized in industrial environments. GradeLens addresses this by exposing its rationale entirely. The Intelligence page provides deep insight into model health, data splits, and causal processing flows. Every recommendation is backed by dynamic evidence tags that calculate live confidence intervals and projected business impact.
+
 ![Evidence Page](docs/evidence_page.png)
 
-## 🚀 Quick Start (Local Development)
+### 5. Fail-Closed Constraint Engine
+Safety is the overriding priority. The recommendation service runs through a strict, fail-closed validation pipeline. If an AI-suggested setpoint change violates predefined safety bounds in the `RecipeConstraint` table, the system will instantly reject the recommendation and refuse to present it to the operator.
 
-The project consists of a FastAPI backend and a React (Vite) frontend.
+---
 
-### 1. Backend Setup
+## Deployment Configuration
 
-```bash
-cd backend
-# Install dependencies
-pip install -r requirements.txt
-# Start the API server
-uvicorn app.main:app --reload --port 8000
-```
-*Note: The backend will automatically bootstrap the SQLite database, generate synthetic timeseries data, and train the Random Forest & KNN models on first launch.*
-
-### 2. Frontend Setup
+GradeLens is containerized and configured for zero-configuration deployments using Docker Compose. The architecture routes frontend traffic through an Nginx reverse proxy directly to the FastAPI container.
 
 ```bash
-cd frontend
-# Install dependencies
-npm install
-# Start the dev server
-npm run dev
-```
-
-## 🐳 Deployment (Docker)
-
-GradeLens is production-ready via Docker Compose. The configuration handles cross-container networking and creates a persistent volume for the SQLite database.
-
-```bash
-# From the root directory
+# To run the entire stack locally or on a production VM:
 docker compose up --build -d
 ```
 Access the application at `http://localhost:8080`.
 
-## 🏗️ Architecture
+---
 
-```text
-Synthetic Generator (offline script)
-        │  writes CSV + SQLite seed
-        ▼
-FastAPI backend
-   ├── feature_service       (deviation, slope, rolling stats, interaction features)
-   ├── risk_service          (Random Forest classifier → probability, direction)
-   ├── trajectory_service    (per-horizon regressors → 30/60/120s forecast)
-   ├── stabilization_service (k-NN over historical events → remaining stabilization time)
-   ├── rootcause_service     (feature importances + deviation/slope ranking → ranked list + text)
-   ├── correlation_service   (Pearson/Spearman + lagged interaction feature → relationships)
-   ├── constraint_service    (recipe/actuator bounds check — hard reject on violation)
-   ├── recommendation_service(candidate search → constraint filter → re-score → rank)
-   └── feedback_service      (accept/reject/modify persistence + audit query)
-        │  REST JSON
-        ▼
-React frontend
-   Command Center → Scenario Lab → Influence Graph → Intelligence/Evidence
-```
+## Disclaimer
 
-## ⚠️ Disclaimer
-
-- **Advisory Only**: GradeLens does not replace or write to any live QCS/MPC system. It operates purely as an advisory dashboard.
-- **Synthetic Data**: All data in this prototype is synthetically generated to demonstrate the system's capabilities. The seeded interaction relationships (e.g., filler-flow ramp × steam-pressure slope at 45s lag) were deliberately built to validate the discovery engine's sensitivity to compound effects.
+- **Advisory Only**: GradeLens does not replace or write to any live Quality Control System (QCS) or Distributed Control System (DCS). It operates purely as an advisory, read-only dashboard.
+- **Synthetic Data**: All data in this repository is synthetically generated upon application startup to demonstrate the system's capabilities. Seeded interaction relationships were deliberately engineered to validate the discovery engine's mathematical sensitivity.
