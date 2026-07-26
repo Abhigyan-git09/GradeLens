@@ -50,6 +50,16 @@ def test_data_overview_makes_provenance_and_leakage_visible():
     assert overview["provenance"]["point_count"] > 20_000
     assert overview["split"]["demo_events_excluded"] is True
     assert overview["split"]["future_window_leakage_prevented"] is True
+    risk_metrics = overview["model_metrics"]["risk"]
+    assert risk_metrics["threshold_source"] == (
+        "pre-breach validation F1 score"
+    )
+    assert risk_metrics["validation"]["windows"] > 0
+    assert risk_metrics["pre_breach_30s"]["positive_windows"] > 0
+    assert risk_metrics["event_level"]["detected_failure_events"] > 0
+    assert 0.0 <= overview["model_metrics"][
+        "stabilization_regressor_weight"
+    ] <= 1.0
     assert len(overview["trajectory_profiles"]) >= 40
     assert len(overview["feature_importance"]) == 16
     assert any(

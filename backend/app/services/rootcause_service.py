@@ -131,8 +131,9 @@ class RootCauseService:
                     contribution_pct=round(contribution, 3),
                     current_deviation=round(raw_value, 3),
                     rationale=(
-                        f"{display} — local SHAP contribution "
-                        f"{contribution * 100:.0f}%; {explanation}."
+                        f"{display} — {contribution * 100:.0f}% share of the "
+                        "ranked local SHAP attribution; "
+                        f"{explanation}."
                     ),
                     is_interaction=name == "interaction_feature",
                 )

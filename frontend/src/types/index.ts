@@ -145,20 +145,15 @@ export interface DiscoveredRelationship {
 }
 
 // ---- Health Check ----
-  export interface HealthStatus {
-    status: string;
-    ready?: boolean;
-    model_mode: 'trained' | 'degraded' | 'partial';
-    database_ready?: boolean;
-    version: string;
-    project: string;
-    environment?: 'development' | 'test' | 'production';
-  metrics?: {
-    dataset: Record<string, number>;
-    risk: Record<string, number>;
-    trajectory_mae_gsm: Record<string, number>;
-    stabilization_mae_seconds: number;
-  } | null;
+export interface HealthStatus {
+  status: string;
+  ready?: boolean;
+  model_mode: 'trained' | 'degraded' | 'partial';
+  database_ready?: boolean;
+  version: string;
+  project: string;
+  environment?: 'development' | 'test' | 'production';
+  metrics?: DataOverview['model_metrics'] | null;
 }
 
 // ---- Audit Entry ----
@@ -238,9 +233,48 @@ export interface DataOverview {
     future_window_leakage_prevented: boolean;
   };
   model_metrics: {
-    dataset?: Record<string, number>;
-    risk?: Record<string, number>;
+    dataset?: Record<string, number | string>;
+    risk?: {
+      windows?: number;
+      positive_windows?: number;
+      accuracy?: number;
+      precision?: number;
+      recall?: number;
+      roc_auc?: number | null;
+      pr_auc?: number | null;
+      brier_score?: number;
+      decision_threshold?: number;
+      threshold_source?: string;
+      positive_windows_already_off_spec_fraction?: number;
+      validation?: {
+        windows: number;
+        positive_windows: number;
+        selected_threshold: number;
+        precision_at_threshold: number;
+      };
+      pre_breach_30s?: {
+        windows: number;
+        positive_windows: number;
+        accuracy: number;
+        precision: number;
+        recall: number;
+        roc_auc: number | null;
+        pr_auc: number | null;
+        brier_score: number;
+      };
+      event_level?: {
+        test_events: number;
+        failure_events: number;
+        detected_failure_events: number;
+        missed_failure_events: number;
+        false_alert_success_events: number;
+        median_warning_seconds: number | null;
+        minimum_warning_seconds: number | null;
+      };
+    };
     trajectory_mae_gsm?: Record<string, number>;
+    stabilization_validation_mae_seconds?: number;
+    stabilization_regressor_weight?: number;
     stabilization_mae_seconds?: number;
   };
   outcome_summary: OutcomeSummary[];

@@ -10,6 +10,7 @@ class StabilizationService:
         self.model = None
         self.neighbor_model = None
         self.neighbor_count = 0
+        self.regressor_weight = 0.8
         self.is_trained = False
         self._load_model()
 
@@ -17,6 +18,7 @@ class StabilizationService:
         self.model = None
         self.neighbor_model = None
         self.neighbor_count = 0
+        self.regressor_weight = 0.8
         self.is_trained = False
         if self.model_path.exists():
             try:
@@ -26,6 +28,13 @@ class StabilizationService:
                     self.neighbor_model = artifact.get("neighbors")
                     self.neighbor_count = int(
                         artifact.get("neighbor_count", 0)
+                    )
+                    self.regressor_weight = min(
+                        1.0,
+                        max(
+                            0.0,
+                            float(artifact.get("regressor_weight", 0.8)),
+                        ),
                     )
                 else:
                     self.model = artifact
@@ -37,10 +46,7 @@ class StabilizationService:
         self._load_model()
 
     def estimate_stabilization(self, features: Dict[str, float]) -> dict:
-        """Estimate remaining stabilization time using k-NN."""
-        # Use all 7 features, but take absolute values for slopes/ramps if desired,
-        # or just pass them raw. Given we updated FEATURE_NAMES to have 7, let's just pass them.
-        # To keep it simple, we'll just pass the raw features in consistent order.
+        """Estimate remaining stabilization time with a validated hybrid."""
         X = np.array([[features.get(f, 0.0) for f in FEATURE_NAMES]])
 
         if not self.is_trained:
@@ -56,11 +62,16 @@ class StabilizationService:
         est_time = float(self.model.predict(X)[0])
         if self.neighbor_model is not None:
             neighbor_time = float(self.neighbor_model.predict(X)[0])
-            est_time = 0.8 * est_time + 0.2 * neighbor_time
+            est_time = (
+                self.regressor_weight * est_time
+                + (1.0 - self.regressor_weight) * neighbor_time
+            )
         
         return {
             "estimated_seconds": max(0.0, round(est_time, 1)),
-            "similar_events_used": self.neighbor_count,
+            "similar_events_used": (
+                self.neighbor_count if self.regressor_weight < 1.0 else 0
+            ),
             "model_mode": "trained"
         }
 

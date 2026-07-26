@@ -238,7 +238,10 @@ class DataIntelligenceService:
             },
             "variables": variables,
             "split": {
-                "strategy": "event-level chronological split",
+                "strategy": metrics.get("dataset", {}).get(
+                    "split_strategy",
+                    "event-level split (artifact metadata unavailable)",
+                ),
                 "training_pool_events": training_pool,
                 "train_events": metrics.get("dataset", {}).get(
                     "events_train", 0

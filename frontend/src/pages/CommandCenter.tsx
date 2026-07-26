@@ -659,7 +659,9 @@ export default function CommandCenter() {
               )}
             </div>
             <p className="text-[0.6875rem] text-text-muted">
-              {stabilizationData?.similar_events_used !== undefined ? `Based on ${stabilizationData.similar_events_used} similar transitions (k-NN)` : 'Based on similar transitions (k-NN)'}
+              {stabilizationData?.similar_events_used
+                ? `Validated hybrid using ${stabilizationData.similar_events_used} comparable historical windows`
+                : 'Chronologically validated model trained on grade-change history'}
             </p>
           </div>
         </motion.div>
@@ -798,9 +800,14 @@ export default function CommandCenter() {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
         {/* Root Cause Analysis */}
         <motion.div variants={itemVariants} className="lg:col-span-5 panel panel-accent p-5">
-          <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-5">
+          <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider">
             Root Cause Analysis
           </h3>
+          <p className="mb-5 mt-1 text-[0.6875rem] leading-5 text-text-muted">
+            {riskData?.risk_level === 'low'
+              ? `Relative attribution within a low-risk forecast (${Math.round(riskData.probability * 100)}% total risk); percentages are not absolute process impact.`
+              : 'Percentages show each parameter’s share of the ranked local model attribution, not causal effect size.'}
+          </p>
           <div className="space-y-5">
             {rootCauses?.map((cause, i) => (
               <RootCauseItem
@@ -840,8 +847,11 @@ export default function CommandCenter() {
               Recommended Action
             </h3>
             {currentRec ? (
-              <span className="text-[0.625rem] font-medium text-accent bg-accent/8 px-2 py-0.5 rounded-full border border-accent/15">
-                Confidence: {Math.round((simulation?.confidence ?? currentRec.confidence) * 100)}%
+              <span
+                className="text-[0.625rem] font-medium text-accent bg-accent/8 px-2 py-0.5 rounded-full border border-accent/15"
+                title="Composite data quality and model evidence score; not a calibrated probability."
+              >
+                Evidence confidence: {Math.round((simulation?.confidence ?? currentRec.confidence) * 100)}%
               </span>
             ) : (
               <button onClick={generateRec} className="btn btn-primary !py-1 !text-[0.6875rem]">
@@ -866,10 +876,16 @@ export default function CommandCenter() {
                         : `${simulatedValue !== null && simulatedValue.value < currentRec.current_value ? 'Reduce' : 'Increase'} ${currentRec.parameter_name} Setpoint`}
                     </p>
                     <p className="text-[0.6875rem] text-text-muted">{currentRec.rationale}</p>
-                    {simulation && (
+                    {simulation && simulation.avoided_off_spec_seconds >= 10 && (
                       <p className="text-[0.625rem] text-status-stable mt-1.5 font-medium bg-status-stable/10 border border-status-stable/20 px-2 py-0.5 rounded inline-block shadow-sm">
                         <TrendingDown className="w-2.5 h-2.5 inline mr-1" />
                         Projected off-spec exposure reduced by {simulation.avoided_off_spec_seconds.toFixed(0)}s
+                      </p>
+                    )}
+                    {simulation && simulation.avoided_off_spec_seconds < 10 && (
+                      <p className="text-[0.625rem] text-status-stable mt-1.5 font-medium bg-status-stable/10 border border-status-stable/20 px-2 py-0.5 rounded inline-block shadow-sm">
+                        <TrendingDown className="w-2.5 h-2.5 inline mr-1" />
+                        Projected risk reduced by {Math.max(0, (simulation.risk_before - simulation.risk_after) * 100).toFixed(1)} points · stabilization improved by {Math.max(0, simulation.stabilization_before - simulation.stabilization_after).toFixed(0)}s
                       </p>
                     )}
                   </div>

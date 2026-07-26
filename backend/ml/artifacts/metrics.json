@@ -7,22 +7,55 @@
     "events_validation": 15,
     "events_test": 15,
     "test_windows": 3060,
-    "positive_test_windows": 824,
+    "positive_test_windows": 392,
     "spec_deviation_pct": 2.5,
-    "feature_count": 16
+    "feature_count": 16,
+    "split_strategy": "event-level chronological 70/15/15"
   },
   "risk": {
-    "accuracy": 0.992483660130719,
-    "precision": 0.9854545454545455,
-    "recall": 0.9866504854368932,
-    "roc_auc": 0.9995351333865954,
-    "pr_auc": 0.9987898018401804,
-    "brier_score": 0.0063731898788608
+    "windows": 3060,
+    "positive_windows": 392,
+    "accuracy": 0.9941176470588236,
+    "precision": 0.9605911330049262,
+    "recall": 0.9948979591836735,
+    "roc_auc": 0.999734189027935,
+    "pr_auc": 0.9981830055325599,
+    "brier_score": 0.004593017666983113,
+    "decision_threshold": 0.37000000000000005,
+    "threshold_source": "pre-breach validation F1 score",
+    "validation": {
+      "windows": 2110,
+      "positive_windows": 152,
+      "selected_threshold": 0.37000000000000005,
+      "precision_at_threshold": 0.9266666666666666
+    },
+    "pre_breach_30s": {
+      "windows": 2725,
+      "positive_windows": 57,
+      "accuracy": 0.9933944954128441,
+      "precision": 0.7746478873239436,
+      "recall": 0.9649122807017544,
+      "roc_auc": 0.9982377232436415,
+      "pr_auc": 0.9076349033520416,
+      "brier_score": 0.005157567628876062
+    },
+    "positive_windows_already_off_spec_fraction": 0.8112244897959183,
+    "event_level": {
+      "test_events": 15,
+      "failure_events": 3,
+      "detected_failure_events": 3,
+      "missed_failure_events": 0,
+      "false_alert_success_events": 3,
+      "median_warning_seconds": 120.0,
+      "minimum_warning_seconds": 115.0
+    }
   },
   "trajectory_mae_gsm": {
-    "30": 0.15850377097487178,
-    "60": 0.16600047075483793,
-    "120": 0.20194438200548492
+    "30": 0.15055915471487102,
+    "60": 0.15683057834396802,
+    "120": 0.18099663730978474
   },
-  "stabilization_mae_seconds": 147.93476609801237
+  "stabilization_validation_mae_seconds": 161.08596336403463,
+  "stabilization_regressor_weight": 1.0,
+  "stabilization_mae_seconds": 126.50967127153395
 }

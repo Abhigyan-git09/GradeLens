@@ -13,12 +13,12 @@ from sklearn.metrics import (
     accuracy_score,
     precision_score,
     recall_score,
+    fbeta_score,
     roc_auc_score,
     average_precision_score,
     brier_score_loss,
     mean_absolute_error,
 )
-from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -297,41 +297,94 @@ def train_models(db):
     os.makedirs(ARTIFACTS_DIR, exist_ok=True)
     
     # We will overwrite artifacts since training is deterministic or if forced
-    events = db.query(GradeChangeEvent).filter(GradeChangeEvent.event_id.like('EVT-TRAIN-%')).all()
+    events = (
+        db.query(GradeChangeEvent)
+        .filter(GradeChangeEvent.event_id.like("EVT-TRAIN-%"))
+        .order_by(GradeChangeEvent.start_time.asc(), GradeChangeEvent.event_id.asc())
+        .all()
+    )
     if not events:
         print("No training events found.")
         return
         
     X_risk, y_risk = [], []
+    X_risk_val, y_risk_val = [], []
+    validation_window_metadata = []
     X_traj_train, y_traj_30_train, y_traj_60_train, y_traj_120_train = [], [], [], []
     X_stab_train, y_stab_train = [], []
+    X_stab_val, y_stab_val = [], []
     
-    event_ids = [e.event_id for e in events] # Should be exactly 100 events
-    
-    # Split by event_id: 70 train, 15 val, 15 test
-    # 30% for temp -> 15% val, 15% test
-    train_event_ids, temp_event_ids = train_test_split(event_ids, test_size=0.30, random_state=42)
-    val_event_ids, test_event_ids = train_test_split(temp_event_ids, test_size=0.50, random_state=42)
+    event_ids = [event.event_id for event in events]
+
+    # Chronological event-level split. Windows from one transition never cross
+    # split boundaries, and the curated replay events are not in this pool.
+    train_end = max(1, int(len(event_ids) * 0.70))
+    validation_end = max(train_end + 1, int(len(event_ids) * 0.85))
+    train_event_ids = event_ids[:train_end]
+    val_event_ids = event_ids[train_end:validation_end]
+    test_event_ids = event_ids[validation_end:]
+    if not val_event_ids or not test_event_ids:
+        raise RuntimeError(
+            "At least seven training events are required for train/validation/test splits."
+        )
+    train_event_id_set = set(train_event_ids)
+    val_event_id_set = set(val_event_ids)
     
     for event in events:
-        is_train = event.event_id in train_event_ids
-        is_val = event.event_id in val_event_ids
+        is_train = event.event_id in train_event_id_set
+        is_val = event.event_id in val_event_id_set
         
         pts = db.query(TimeseriesPoint).filter(TimeseriesPoint.event_id == event.event_id).order_by(TimeseriesPoint.timestamp.asc()).all()
         
         event_X_risk, event_y_risk = [], []
+        event_risk_metadata = []
         for i in range(12, len(pts) - 24):
             window = pts[i-12:i]
             features = feature_service.extract_features(window)
             
             future_window = pts[i:i+24]
-            max_dev_percent = max(abs(pt.basis_weight_actual - pt.basis_weight_setpoint) / pt.basis_weight_setpoint * 100 for pt in future_window)
+            future_deviations = [
+                abs(point.basis_weight_actual - point.basis_weight_setpoint)
+                / point.basis_weight_setpoint
+                * 100
+                for point in future_window
+            ]
+            max_dev_percent = max(future_deviations)
             failed = 1 if max_dev_percent > settings.SPEC_DEVIATION_PCT else 0
             
             feat_vec = [features.get(f, 0.0) for f in FEATURE_NAMES]
             
             event_X_risk.append(feat_vec)
             event_y_risk.append(failed)
+            current_point = pts[i - 1]
+            current_deviation_pct = (
+                abs(
+                    current_point.basis_weight_actual
+                    - current_point.basis_weight_setpoint
+                )
+                / current_point.basis_weight_setpoint
+                * 100
+            )
+            first_violation_index = next(
+                (
+                    index
+                    for index, deviation in enumerate(future_deviations)
+                    if deviation > settings.SPEC_DEVIATION_PCT
+                ),
+                None,
+            )
+            event_risk_metadata.append(
+                {
+                    "currently_off_spec": (
+                        current_deviation_pct > settings.SPEC_DEVIATION_PCT
+                    ),
+                    "lead_seconds": (
+                        (first_violation_index + 1) * 5.0
+                        if first_violation_index is not None
+                        else None
+                    ),
+                }
+            )
             
             if is_train:
                 current_bw = features["current_bw"]
@@ -339,25 +392,32 @@ def train_models(db):
                 y_traj_60_train.append(pts[i+12].basis_weight_actual - current_bw)
                 y_traj_120_train.append(pts[i+24].basis_weight_actual - current_bw)
                 X_traj_train.append(feat_vec)
-                
+
+            if is_train or is_val:
                 remaining_pts = pts[i:]
                 stab_idx = len(remaining_pts) - 1 if len(remaining_pts) > 0 else 0
                 for j in range(len(remaining_pts)):
                     if all(abs(p.basis_weight_actual - p.basis_weight_setpoint) < 0.5 for p in remaining_pts[j:]):
                         stab_idx = j
                         break
-                X_stab_train.append(feat_vec)
-                y_stab_train.append(stab_idx * 5.0)
+                if is_train:
+                    X_stab_train.append(feat_vec)
+                    y_stab_train.append(stab_idx * 5.0)
+                else:
+                    X_stab_val.append(feat_vec)
+                    y_stab_val.append(stab_idx * 5.0)
 
         if is_train:
             X_risk.extend(event_X_risk)
             y_risk.extend(event_y_risk)
         elif is_val:
-            # We don't train on validation/test events directly
-            pass
+            X_risk_val.extend(event_X_risk)
+            y_risk_val.extend(event_y_risk)
+            validation_window_metadata.extend(event_risk_metadata)
 
     # Extract test set explicitly
     X_risk_test, y_risk_test = [], []
+    test_window_metadata = []
     X_traj_test = []
     y_traj_test = {30: [], 60: [], 120: []}
     X_stab_test, y_stab_test = [], []
@@ -367,11 +427,47 @@ def train_models(db):
             window = pts[i-12:i]
             features = feature_service.extract_features(window)
             future_window = pts[i:i+24]
-            max_dev_percent = max(abs(pt.basis_weight_actual - pt.basis_weight_setpoint) / pt.basis_weight_setpoint * 100 for pt in future_window)
+            future_deviations = [
+                abs(point.basis_weight_actual - point.basis_weight_setpoint)
+                / point.basis_weight_setpoint
+                * 100
+                for point in future_window
+            ]
+            max_dev_percent = max(future_deviations)
             failed = 1 if max_dev_percent > settings.SPEC_DEVIATION_PCT else 0
             feat_vec = [features.get(f, 0.0) for f in FEATURE_NAMES]
             X_risk_test.append(feat_vec)
             y_risk_test.append(failed)
+            current_point = pts[i - 1]
+            current_deviation_pct = (
+                abs(
+                    current_point.basis_weight_actual
+                    - current_point.basis_weight_setpoint
+                )
+                / current_point.basis_weight_setpoint
+                * 100
+            )
+            first_violation_index = next(
+                (
+                    index
+                    for index, deviation in enumerate(future_deviations)
+                    if deviation > settings.SPEC_DEVIATION_PCT
+                ),
+                None,
+            )
+            test_window_metadata.append(
+                {
+                    "event_id": event_id,
+                    "currently_off_spec": (
+                        current_deviation_pct > settings.SPEC_DEVIATION_PCT
+                    ),
+                    "lead_seconds": (
+                        (first_violation_index + 1) * 5.0
+                        if first_violation_index is not None
+                        else None
+                    ),
+                }
+            )
             current_bw = features["current_bw"]
             X_traj_test.append(feat_vec)
             y_traj_test[30].append(pts[i+6].basis_weight_actual - current_bw)
@@ -390,6 +486,7 @@ def train_models(db):
             y_stab_test.append(stab_idx * 5.0)
 
     X_risk, y_risk = np.array(X_risk), np.array(y_risk)
+    X_risk_val, y_risk_val = np.array(X_risk_val), np.array(y_risk_val)
     X_risk_test, y_risk_test = np.array(X_risk_test), np.array(y_risk_test)
 
     # Ensure both classes in train set
@@ -409,10 +506,149 @@ def train_models(db):
     clf.fit(X_risk, y_risk)
     clf._Booster.save_model(os.path.join(ARTIFACTS_DIR, "risk_model.txt"))
     joblib.dump(clf, os.path.join(ARTIFACTS_DIR, "risk_model.joblib"))
-    
-    # Evaluate model on test set
-    y_pred = clf.predict(X_risk_test)
+
+    # Validation data selects the operating point using genuinely pre-breach
+    # windows. This prevents already-failed samples from dominating threshold
+    # selection and balances useful warnings against nuisance alerts.
+    validation_probability = clf.predict_proba(X_risk_val)[:, 1]
+    validation_pre_breach_mask = np.asarray(
+        [
+            not metadata["currently_off_spec"]
+            and (
+                target == 0
+                or (
+                    metadata["lead_seconds"] is not None
+                    and metadata["lead_seconds"] >= 30.0
+                )
+            )
+            for target, metadata in zip(
+                y_risk_val, validation_window_metadata
+            )
+        ],
+        dtype=bool,
+    )
+    threshold_target = y_risk_val[validation_pre_breach_mask]
+    threshold_probability = validation_probability[
+        validation_pre_breach_mask
+    ]
+    threshold_candidates = np.linspace(0.20, 0.80, 61)
+    threshold_results = []
+    for candidate in threshold_candidates:
+        candidate_prediction = (
+            threshold_probability >= candidate
+        ).astype(int)
+        threshold_results.append(
+            (
+                float(
+                    fbeta_score(
+                        threshold_target,
+                        candidate_prediction,
+                        beta=1,
+                        zero_division=0,
+                    )
+                ),
+                float(
+                    precision_score(
+                        threshold_target,
+                        candidate_prediction,
+                        zero_division=0,
+                    )
+                ),
+                -abs(float(candidate) - settings.RISK_THRESHOLD),
+                float(candidate),
+            )
+        )
+    _, validation_precision, _, decision_threshold = max(threshold_results)
+
+    # Evaluate once on the untouched chronological test events.
     y_probability = clf.predict_proba(X_risk_test)[:, 1]
+    y_pred = (y_probability >= decision_threshold).astype(int)
+    pre_breach_mask = np.asarray(
+        [
+            not metadata["currently_off_spec"]
+            and (
+                target == 0
+                or (
+                    metadata["lead_seconds"] is not None
+                    and metadata["lead_seconds"] >= 30.0
+                )
+            )
+            for target, metadata in zip(y_risk_test, test_window_metadata)
+        ],
+        dtype=bool,
+    )
+    y_pre_breach = y_risk_test[pre_breach_mask]
+    probability_pre_breach = y_probability[pre_breach_mask]
+    prediction_pre_breach = y_pred[pre_breach_mask]
+
+    def classification_metrics(target, probability, prediction):
+        has_both_classes = len(np.unique(target)) == 2
+        return {
+            "windows": int(len(target)),
+            "positive_windows": int(np.sum(target)),
+            "accuracy": float(accuracy_score(target, prediction)),
+            "precision": float(
+                precision_score(target, prediction, zero_division=0)
+            ),
+            "recall": float(recall_score(target, prediction, zero_division=0)),
+            "roc_auc": (
+                float(roc_auc_score(target, probability))
+                if has_both_classes
+                else None
+            ),
+            "pr_auc": (
+                float(average_precision_score(target, probability))
+                if has_both_classes
+                else None
+            ),
+            "brier_score": float(brier_score_loss(target, probability)),
+        }
+
+    positive_window_count = int(np.sum(y_risk_test))
+    already_off_spec_positive_count = sum(
+        bool(target) and metadata["currently_off_spec"]
+        for target, metadata in zip(y_risk_test, test_window_metadata)
+    )
+    event_outcomes = {
+        event.event_id: event.transition_outcome
+        for event in events
+        if event.event_id in set(test_event_ids)
+    }
+    alerts_by_event = {event_id: [] for event_id in test_event_ids}
+    for probability, metadata in zip(y_probability, test_window_metadata):
+        if (
+            probability >= decision_threshold
+            and not metadata["currently_off_spec"]
+        ):
+            alerts_by_event[metadata["event_id"]].append(metadata)
+    failure_event_ids = [
+        event_id
+        for event_id, outcome in event_outcomes.items()
+        if outcome == "failure"
+    ]
+    detected_failure_ids = [
+        event_id
+        for event_id in failure_event_ids
+        if any(
+            alert["lead_seconds"] is not None
+            and alert["lead_seconds"] >= 5.0
+            for alert in alerts_by_event[event_id]
+        )
+    ]
+    warning_leads = [
+        max(
+            alert["lead_seconds"]
+            for alert in alerts_by_event[event_id]
+            if alert["lead_seconds"] is not None
+        )
+        for event_id in detected_failure_ids
+    ]
+    false_alert_event_ids = [
+        event_id
+        for event_id, outcome in event_outcomes.items()
+        if outcome == "success" and alerts_by_event[event_id]
+    ]
+
     total_event_count = db.query(GradeChangeEvent).count()
     metrics = {
         "dataset": {
@@ -426,14 +662,43 @@ def train_models(db):
             "positive_test_windows": int(np.sum(y_risk_test)),
             "spec_deviation_pct": settings.SPEC_DEVIATION_PCT,
             "feature_count": len(FEATURE_NAMES),
+            "split_strategy": "event-level chronological 70/15/15",
         },
         "risk": {
-            "accuracy": float(accuracy_score(y_risk_test, y_pred)),
-            "precision": float(precision_score(y_risk_test, y_pred, zero_division=0)),
-            "recall": float(recall_score(y_risk_test, y_pred, zero_division=0)),
-            "roc_auc": float(roc_auc_score(y_risk_test, y_probability)),
-            "pr_auc": float(average_precision_score(y_risk_test, y_probability)),
-            "brier_score": float(brier_score_loss(y_risk_test, y_probability)),
+            **classification_metrics(y_risk_test, y_probability, y_pred),
+            "decision_threshold": decision_threshold,
+            "threshold_source": "pre-breach validation F1 score",
+            "validation": {
+                "windows": int(len(threshold_target)),
+                "positive_windows": int(np.sum(threshold_target)),
+                "selected_threshold": decision_threshold,
+                "precision_at_threshold": validation_precision,
+            },
+            "pre_breach_30s": classification_metrics(
+                y_pre_breach,
+                probability_pre_breach,
+                prediction_pre_breach,
+            ),
+            "positive_windows_already_off_spec_fraction": (
+                already_off_spec_positive_count / positive_window_count
+                if positive_window_count
+                else 0.0
+            ),
+            "event_level": {
+                "test_events": len(test_event_ids),
+                "failure_events": len(failure_event_ids),
+                "detected_failure_events": len(detected_failure_ids),
+                "missed_failure_events": (
+                    len(failure_event_ids) - len(detected_failure_ids)
+                ),
+                "false_alert_success_events": len(false_alert_event_ids),
+                "median_warning_seconds": (
+                    float(np.median(warning_leads)) if warning_leads else None
+                ),
+                "minimum_warning_seconds": (
+                    float(min(warning_leads)) if warning_leads else None
+                ),
+            },
         },
         "trajectory_mae_gsm": {},
     }
@@ -447,6 +712,16 @@ def train_models(db):
     print(f"Precision: {metrics['risk']['precision']:.3f}")
     print(f"Recall:    {metrics['risk']['recall']:.3f}")
     print(f"ROC-AUC:   {metrics['risk']['roc_auc']:.3f}")
+    print(f"Validation-selected alert threshold: {decision_threshold:.2f}")
+    print(
+        "Pre-breach (>=30s) precision/recall: "
+        f"{metrics['risk']['pre_breach_30s']['precision']:.3f}/"
+        f"{metrics['risk']['pre_breach_30s']['recall']:.3f}"
+    )
+    print(
+        "Failure events warned before breach: "
+        f"{len(detected_failure_ids)}/{len(failure_event_ids)}"
+    )
     print("----------------------------------\n")
     
     for horizon, y_t in [(30, y_traj_30_train), (60, y_traj_60_train), (120, y_traj_120_train)]:
@@ -478,18 +753,48 @@ def train_models(db):
         random_state=RANDOM_SEED,
         verbosity=-1,
     ).fit(np.array(X_stab_train), np.array(y_stab_train))
+    validation_regressor_prediction = stabilization_model.predict(
+        np.asarray(X_stab_val)
+    )
+    validation_neighbor_prediction = neighbor_model.predict(
+        np.asarray(X_stab_val)
+    )
+    blend_scores = [
+        (
+            float(
+                mean_absolute_error(
+                    y_stab_val,
+                    (
+                        weight * validation_regressor_prediction
+                        + (1.0 - weight) * validation_neighbor_prediction
+                    ),
+                )
+            ),
+            float(weight),
+        )
+        for weight in np.linspace(0.0, 1.0, 11)
+    ]
+    stabilization_validation_mae, regressor_weight = min(blend_scores)
+    neighbor_weight = 1.0 - regressor_weight
     joblib.dump(
         {
             "regressor": stabilization_model,
             "neighbors": neighbor_model,
             "neighbor_count": 5,
+            "regressor_weight": regressor_weight,
         },
         os.path.join(ARTIFACTS_DIR, "stabilization_knn.joblib"),
     )
     stabilization_prediction = (
-        0.8 * stabilization_model.predict(np.asarray(X_stab_test))
-        + 0.2 * neighbor_model.predict(np.asarray(X_stab_test))
+        regressor_weight
+        * stabilization_model.predict(np.asarray(X_stab_test))
+        + neighbor_weight
+        * neighbor_model.predict(np.asarray(X_stab_test))
     )
+    metrics["stabilization_validation_mae_seconds"] = (
+        stabilization_validation_mae
+    )
+    metrics["stabilization_regressor_weight"] = regressor_weight
     metrics["stabilization_mae_seconds"] = float(
         mean_absolute_error(
             y_stab_test,

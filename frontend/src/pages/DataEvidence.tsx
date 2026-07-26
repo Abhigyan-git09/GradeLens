@@ -84,6 +84,8 @@ export default function DataEvidence() {
   }
 
   const metrics = data.model_metrics.risk ?? {}
+  const earlyMetrics = metrics.pre_breach_30s
+  const eventMetrics = metrics.event_level
   const outcomeChart = data.outcome_summary
     .filter((item) => item.outcome === 'success' || item.outcome === 'failure')
     .map((item) => ({
@@ -221,14 +223,16 @@ export default function DataEvidence() {
       <section className="grid gap-5 xl:grid-cols-[0.8fr_1.2fr]">
         <div className="panel p-5">
           <h3 className="text-sm font-semibold">Model validation</h3>
-          <p className="mt-1 text-xs text-text-muted">Held-out event windows; curated demo events excluded.</p>
+          <p className="mt-1 text-xs text-text-muted">
+            Untouched chronological test events; primary warning metrics are measured at least 30 seconds before breach.
+          </p>
           <div className="mt-5 grid grid-cols-2 gap-3">
             {[
-              ['ROC–AUC', metrics.roc_auc],
-              ['PR–AUC', metrics.pr_auc],
-              ['Precision', metrics.precision],
-              ['Recall', metrics.recall],
-              ['Brier score', metrics.brier_score],
+              ['Early ROC–AUC', earlyMetrics?.roc_auc],
+              ['Early PR–AUC', earlyMetrics?.pr_auc],
+              ['Early precision', earlyMetrics?.precision],
+              ['Early recall', earlyMetrics?.recall],
+              ['Early Brier', earlyMetrics?.brier_score],
               ['Stab. MAE', data.model_metrics.stabilization_mae_seconds, 's'],
             ].map(([label, value, unit]) => (
               <div key={String(label)} className="rounded border border-panel-border/50 bg-panel-bg/45 p-3">
@@ -240,11 +244,47 @@ export default function DataEvidence() {
               </div>
             ))}
           </div>
+          <div className="mt-4 grid grid-cols-2 gap-3 rounded border border-accent/20 bg-accent/5 p-3 text-[0.6875rem] text-text-secondary">
+            <p>
+              <span className="block text-[0.625rem] uppercase tracking-wider text-text-muted">Alert threshold</span>
+              <span className="data-value text-base text-accent">
+                {typeof metrics.decision_threshold === 'number' ? metrics.decision_threshold.toFixed(2) : '--'}
+              </span>
+              <span className="ml-1 text-text-muted">selected on pre-breach validation F1</span>
+            </p>
+            <p>
+              <span className="block text-[0.625rem] uppercase tracking-wider text-text-muted">Event detection</span>
+              <span className="data-value text-base text-accent">
+                {eventMetrics ? `${eventMetrics.detected_failure_events}/${eventMetrics.failure_events}` : '--'}
+              </span>
+              <span className="ml-1 text-text-muted">failed test transitions warned</span>
+            </p>
+            <p>
+              <span className="block text-[0.625rem] uppercase tracking-wider text-text-muted">Median warning</span>
+              <span className="data-value text-base">
+                {eventMetrics?.median_warning_seconds != null ? `${eventMetrics.median_warning_seconds.toFixed(0)}s` : '--'}
+              </span>
+            </p>
+            <p>
+              <span className="block text-[0.625rem] uppercase tracking-wider text-text-muted">False-alert events</span>
+              <span className="data-value text-base">
+                {eventMetrics?.false_alert_success_events ?? '--'}
+              </span>
+              <span className="ml-1 text-text-muted">successful test transitions</span>
+            </p>
+          </div>
           <div className="mt-4 space-y-2 rounded border border-status-stable/20 bg-status-stable/5 p-3 text-[0.6875rem] text-text-secondary">
             <p className="flex items-center gap-2"><CheckCircle2 className="h-3.5 w-3.5 text-status-stable" /> {data.split.strategy}</p>
             <p className="flex items-center gap-2"><CheckCircle2 className="h-3.5 w-3.5 text-status-stable" /> {data.split.train_events}/{data.split.validation_events}/{data.split.test_events} train/validation/test events</p>
+            <p className="flex items-center gap-2"><CheckCircle2 className="h-3.5 w-3.5 text-status-stable" /> {earlyMetrics?.windows ?? 0} genuinely pre-breach evaluation windows</p>
             <p className="flex items-center gap-2"><CheckCircle2 className="h-3.5 w-3.5 text-status-stable" /> Replay demo events excluded from training</p>
           </div>
+          <p className="mt-3 text-[0.625rem] leading-5 text-text-muted">
+            All-window scores are retained in the artifact for audit. {(metrics.positive_windows_already_off_spec_fraction ?? 0) * 100 > 0
+              ? `${((metrics.positive_windows_already_off_spec_fraction ?? 0) * 100).toFixed(1)}% of positive test windows were already off-spec, so they are excluded from the early-warning headline metrics.`
+              : 'No positive test windows were already off-spec.'}
+            {' '}Synthetic performance is not calibrated site performance.
+          </p>
         </div>
 
         <div className="panel p-5">

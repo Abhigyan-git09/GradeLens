@@ -15,7 +15,6 @@ RUN npm run build
 FROM ${NGINX_IMAGE}
 
 ENV BACKEND_UPSTREAM=http://backend:8000 \
-    GRADELENS_WRITE_API_KEY="" \
     NGINX_ENVSUBST_FILTER="^(BACKEND_UPSTREAM|GRADELENS_WRITE_API_KEY)$"
 
 COPY nginx/default.conf.template /etc/nginx/templates/default.conf.template

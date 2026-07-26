@@ -2,13 +2,20 @@ import os
 import sys
 import pytest
 import datetime
+from types import SimpleNamespace
 from sqlalchemy import text
 
 # Add backend dir to python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.database import SessionLocal, init_db
-from app.models.domain import Recommendation, OperatorFeedback, GradeChangeEvent, TimeseriesPoint
+from app.models.domain import (
+    EvidenceTag,
+    Recommendation,
+    OperatorFeedback,
+    GradeChangeEvent,
+    TimeseriesPoint,
+)
 from app.routers.recommendations import accept_recommendation
 from app.routers.grade_changes import get_snapshot
 from fastapi import HTTPException
@@ -74,40 +81,86 @@ def test_snapshot_leakage():
 
 def test_no_action_baseline():
     db = SessionLocal()
-    # Mock risk and stab in RecommendationEngine to return safe values
-    # We will invoke the private `_create_no_action_recommendation` directly via engine
-    # Actually, we can just call generate() for a low risk event.
-    # EVT-001-SUCCESS is a success event, early timestamps might be low risk.
-    event = db.query(GradeChangeEvent).filter(GradeChangeEvent.event_id == "EVT-001-SUCCESS").first()
-    if event:
-        pts = db.query(TimeseriesPoint).filter(TimeseriesPoint.event_id == "EVT-001-SUCCESS").order_by(TimeseriesPoint.timestamp.asc()).all()
-        # Find a point where deviation is very small
-        for i in range(12, len(pts)):
-            if abs(pts[i].basis_weight_actual - pts[i].basis_weight_setpoint) < 0.1:
-                # Force engine to generate from this point
-                # Since engine currently just takes the latest point up to the full event, 
-                # we'll mock the internal methods instead
-                break
-
-    # Use a real event so the recommendation satisfies the database foreign
-    # key constraint enforced in production.
-    assert event is not None
-    rec = recommendation_engine._create_no_action_recommendation(
-        event.event_id,
-        db,
-        0.1,
-        0,
+    event = (
+        db.query(GradeChangeEvent)
+        .filter(GradeChangeEvent.event_id == "EVT-001-SUCCESS")
+        .first()
     )
-    assert rec.parameter_name == "No intervention"
-    assert rec.rationale == "No corrective action is currently recommended. Continue monitoring."
-    db.close()
+    if not event:
+        db.close()
+        pytest.skip("Seeded success event not found")
+    points = (
+        db.query(TimeseriesPoint)
+        .filter(TimeseriesPoint.event_id == event.event_id)
+        .order_by(TimeseriesPoint.timestamp.asc())
+        .all()
+    )
+    assert len(points) >= 13
+    rec = None
+    try:
+        rec = recommendation_engine.generate(
+            event.event_id,
+            db,
+            points[12].timestamp.isoformat(),
+        )
+        assert rec is not None
+        assert rec.parameter_name == "No intervention"
+        assert "Continue monitoring." in rec.rationale
+        assert 0.50 <= rec.confidence <= 0.95
+    finally:
+        if rec is not None:
+            db.query(EvidenceTag).filter(
+                EvidenceTag.recommendation_id == rec.recommendation_id
+            ).delete(synchronize_session=False)
+            db.query(Recommendation).filter(
+                Recommendation.recommendation_id == rec.recommendation_id
+            ).delete(synchronize_session=False)
+            db.commit()
+        db.close()
 
 def test_minimum_risk_reduction():
-    # If the best candidate reduces risk by less than 0.05, it should fallback to no action.
-    # Since we can't easily mock the DB in this environment without complex setup, 
-    # we know the code handles it: if best["risk_after"] > current_risk - MIN_IMPROVEMENT
-    # We will trust the unit logic for now and verify no-action baseline handles it.
-    pass
+    weak_candidate = {
+        "risk_before": 0.99,
+        "risk_after": 0.987,
+        "stabilization_before": 767.0,
+        "stabilization_after": 739.6,
+        "avoided_off_spec_seconds": 0.0,
+    }
+    useful_risk_candidate = {
+        **weak_candidate,
+        "risk_after": 0.93,
+    }
+    useful_stabilization_candidate = {
+        **weak_candidate,
+        "stabilization_after": 660.0,
+    }
+    assert not recommendation_engine._is_material_improvement(weak_candidate)
+    assert recommendation_engine._is_material_improvement(
+        useful_risk_candidate
+    )
+    assert recommendation_engine._is_material_improvement(
+        useful_stabilization_candidate
+    )
+
+
+def test_no_action_confidence_responds_to_data_quality():
+    clean = SimpleNamespace(
+        scanner_quality_score=0.99,
+        active_alarm_count=0,
+    )
+    degraded = SimpleNamespace(
+        scanner_quality_score=0.55,
+        active_alarm_count=3,
+    )
+    clean_confidence = recommendation_engine._estimate_no_action_confidence(
+        clean, 0.10, "trained", 0.60
+    )
+    degraded_confidence = (
+        recommendation_engine._estimate_no_action_confidence(
+            degraded, 0.10, "degraded", 0.60
+        )
+    )
+    assert 0.50 <= degraded_confidence < clean_confidence <= 0.95
 
 def test_demo_event_exclusion():
     from ml.feature_service import feature_service

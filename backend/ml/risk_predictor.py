@@ -1,3 +1,4 @@
+import json
 import joblib
 import numpy as np
 import lightgbm as lgb
@@ -8,16 +9,30 @@ from ml.feature_service import FEATURE_NAMES
 class RiskPredictor:
     def __init__(self):
         self.model_path = settings.MODEL_DIR / "risk_model.joblib"
+        self.metrics_path = settings.MODEL_DIR / "metrics.json"
         self.model = None
         self.is_trained = False
+        self.decision_threshold = settings.RISK_THRESHOLD
         self._load_model()
 
     def _load_model(self):
         self.model = None
         self.is_trained = False
+        self.decision_threshold = settings.RISK_THRESHOLD
         if self.model_path.exists():
             try:
                 self.model = joblib.load(self.model_path)
+                if self.metrics_path.exists():
+                    metrics = json.loads(
+                        self.metrics_path.read_text(encoding="utf-8")
+                    )
+                    artifact_threshold = metrics.get("risk", {}).get(
+                        "decision_threshold"
+                    )
+                    if isinstance(artifact_threshold, (int, float)):
+                        self.decision_threshold = min(
+                            1.0, max(0.0, float(artifact_threshold))
+                        )
                 self.is_trained = True
             except Exception:
                 self.is_trained = False
