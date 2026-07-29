@@ -1,0 +1,16 @@
+name: Keep Render Alive
+
+on:
+  schedule:
+    # Runs every 14 minutes
+    - cron: "*/14 * * * *"
+  # Allows you to manually trigger the workflow from the GitHub Actions tab
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Backend API
+        # We spoof a standard Chrome User-Agent so Render's firewall doesn't block the request
+        run: curl -sSf -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" https://gradelens-api-abhigyan-git09.onrender.com/health/live
